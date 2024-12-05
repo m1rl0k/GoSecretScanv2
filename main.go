@@ -1,4 +1,5 @@
 package main
+
 import (
 	"bufio"
 	"fmt"
@@ -8,16 +9,16 @@ import (
 	"sync"
 	"strings"
 )
-const (
 
+const (
 	ResetColor    = "\033[0m"
 	RedColor      = "\033[31m"
 	GreenColor    = "\033[32m"
 	YellowColor   = "\033[33m"
 	SeparatorLine = "------------------------------------------------------------------------"
 )
+
 var secretPatterns = []string{
-	
     `(?i)_(Private_Key):[-]{5}BEGIN\\s(?:[DR]SA|OPENSSH|EC|PGP)\\sPRIVATE\\sKEY(?:\\sBLOCK)?[-]{5}`,
     `(?i)_(AWS_Key):[\\s'\"=]A[KS]IA[0-9A-Z]{16}[\\s'\"]`,
     `(?i)_(AWS_Key_line_end):[\\s=]A[KS]IA[0-9A-Z]{16}$`,
@@ -66,27 +67,34 @@ var secretPatterns = []string{
     `(?i)_(Password_equal_no_quotes):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret)\s{0,20}[=]\s{0,20}([a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45}[^\\sa-z;',\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})(?:(?:<\/)|[\s;',]|$)`,
     `(?i)_(Password_value):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret).{0,10}value[=]['\"]([^\\sa-z;'\",\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})['\"]`,
     `(?i)_(Password_primary):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret)\\sprimary[=]['\"]([^\\sa-z;'\",\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})(?:['"\\s;,\"]|$)`,
+    `(?i)encryPublicKey\s*=\s*\"([A-Za-z0-9+/=\r\n]+)\"`,
+    `(?i)decryPrivateKey\s*=\s*\"([A-Za-z0-9+/=\r\n]+)\"`,
 
 }
+
 type Secret struct {
 	File       string
 	LineNumber int
 	Line       string
 	Type       string
 }
+
 func init() {
 	additionalPatterns := AdditionalSecretPatterns()
 	secretPatterns = append(secretPatterns, additionalPatterns...)
 }
+
 func main() {
-	// Get the current working directory
 	dir, err := os.Getwd()
 	if err != nil {
 		fmt.Println("Error getting current working directory:", err)
 		os.Exit(1)
 	}
+
 	var secretsFound []Secret
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -97,35 +105,35 @@ func main() {
 				defer wg.Done()
 				secrets, err := scanFileForSecrets(p)
 				if err != nil {
-					fmt.Println("Error scanning file:", err)
+					fmt.Printf("Error scanning file %s: %v\n", p, err)
+					return
 				}
+				mu.Lock()
 				secretsFound = append(secretsFound, secrets...)
+				mu.Unlock()
 			}(path)
 		}
 		return nil
 	})
 	if err != nil {
 		fmt.Println("Error walking the directory:", err)
+		os.Exit(1)
 	}
-	wg.Wait()
-	if len(secretsFound) > 0 {
-	fmt.Printf("\n%s%s%s\n", YellowColor, SeparatorLine, ResetColor)
-	fmt.Printf("%sSecrets found:%s\n", RedColor, ResetColor)
-	for _, secret := range secretsFound {
-		fmt.Printf("%sFile:%s %s\n%sLine Number:%s %d\n%sType:%s %s\n%sLine:%s %s\n\n", YellowColor, ResetColor, secret.File, YellowColor, ResetColor, secret.LineNumber, YellowColor, ResetColor, secret.Type, YellowColor, ResetColor, secret.Line)
-	}
-	fmt.Printf("%s%s\n", YellowColor, SeparatorLine)
-	fmt.Printf("%s%d secrets found. Please review and remove them before committing your code.%s\n", RedColor, len(secretsFound), ResetColor)
-	os.Exit(1) // Exit with a non-zero exit code, indicating a failure
-} else {
-        fmt.Printf("%sNo secrets found.%s\n", GreenColor, ResetColor)
-        exitWithError()
-    }
-}
 
-func exitWithError() {
-    fmt.Println("Exiting with a non-zero exit code, indicating a failure")
-    os.Exit(1)
+	wg.Wait()
+
+	if len(secretsFound) > 0 {
+		fmt.Printf("\n%s%s%s\n", YellowColor, SeparatorLine, ResetColor)
+		fmt.Printf("%sSecrets found:%s\n", RedColor, ResetColor)
+		for _, secret := range secretsFound {
+			fmt.Printf("%sFile:%s %s\n%sLine Number:%s %d\n%sType:%s %s\n%sLine:%s %s\n\n", YellowColor, ResetColor, secret.File, YellowColor, ResetColor, secret.LineNumber, YellowColor, ResetColor, secret.Type, YellowColor, ResetColor, secret.Line)
+		}
+		fmt.Printf("%s%s\n", YellowColor, SeparatorLine)
+		fmt.Printf("%s%d secrets found. Please review and remove them before committing your code.%s\n", RedColor, len(secretsFound), ResetColor)
+		os.Exit(1)
+	} else {
+		fmt.Printf("%sNo secrets found.%s\n", GreenColor, ResetColor)
+	}
 }
 func scanFileForSecrets(path string) ([]Secret, error) {
 	file, err := os.Open(path)
@@ -133,41 +141,41 @@ func scanFileForSecrets(path string) ([]Secret, error) {
 		return nil, err
 	}
 	defer file.Close()
+
 	scanner := bufio.NewScanner(file)
 	lineNumber := 1
 	var secrets []Secret
+
 	for scanner.Scan() {
 		line := scanner.Text()
-		var secretIndex int = -1 // initialize secretIndex to -1
+
 		for index, pattern := range secretPatterns {
 			re := regexp.MustCompile(pattern)
 			match := re.FindStringSubmatch(line)
+
 			if len(match) > 0 {
 				secretType := "Secret"
-				if index >= len(secretPatterns) - len(AdditionalSecretPatterns()) {
-					secretType = "Additional Secret"
+				if index >= len(secretPatterns)-len(AdditionalSecretPatterns()) {
+									secretType = "Additional Secret"
 				}
 				secrets = append(secrets, Secret{
 					File:       fmt.Sprintf("%s (%s)", path, secretType),
 					LineNumber: lineNumber,
 					Line:       line,
-					Type:       pattern, // set Type to the name of the secret pattern
+					Type:       pattern,
 				})
-				secretIndex = index // set secretIndex to the index of the secret pattern
 				break
 			}
 		}
-		if secretIndex >= 0 {
-			// remove the matched secret pattern from the secretPatterns slice
-			secretPatterns = append(secretPatterns[:secretIndex], secretPatterns[secretIndex+1:]...)
-		}
 		lineNumber++
 	}
+
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return secrets, nil
 }
+
 func AdditionalSecretPatterns() []string {
 	vulnerabilityPatterns := []string{
 		// Add your additional regex patterns here
@@ -191,22 +199,28 @@ func AdditionalSecretPatterns() []string {
 		`(?i)(?:Server|Host)=([\w\.-]+);\s*(?:Port|Database|User\s*ID|Password)=([^;\s]+)(?:;\s*(?:Port|Database|User\s*ID|Password)=([^;\s]+))*`,
 		// Path traversal attempts
 		// `(\.\./|\.\.\\)`,
-	        // Open redirects
+		// Open redirects
 		// `(?i)(?:(?:https?|ftp)://|%3A%2F%2F)[^\s&]+(?:\s|%20)*(?:\b(?:and|or)\b\s*[\w-]*\s*=\s*[\w-]*\s*\b(?:and|or)\b\s*[^\s]+)?`,
 		// UPLOAD MISCONFIG
 		//`(?i)enctype\s*=\s*['"]multipart/form-data['"]`,
 		// Headers
 		//`(?i)<(title|head)>`,
+        `(?i)encryPublicKey\s*=\s*"([^"]*)"`,
+        `(?i)decryPrivateKey\s*=\s*"([^"]*)"`,
 	}
 	return vulnerabilityPatterns
 }
+
 func shouldIgnore(path string) bool {
-    ignorePatterns := []string{
-        `^\.git($|/)`, // ignore .git directory and its contents
-        `node_modules`,
-        // Add more ignore patterns if needed
-    }
-    for _, pattern := range ignorePatterns {
-        if matched, _ := regexp.MatchString(pattern, path); matched {
-            return true
-        }
+	ignorePatterns := []string{
+		`^\.git($|/)`, // ignore .git directory and its contents
+		`node_modules`,
+		// Add more ignore patterns if needed
+	}
+	for _, pattern := range ignorePatterns {
+		if matched, _ := regexp.MatchString(pattern, path); matched {
+			return true
+		}
+	}
+	return strings.HasSuffix(path, "main.go")
+}
