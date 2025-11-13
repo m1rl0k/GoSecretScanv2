@@ -416,61 +416,28 @@ Final Mapping:
 < 40: Low (filtered out)
 ```
 
-### Why This Is Better Than Gitleaks
+## Performance Characteristics
 
-| Feature | GoSecretScanv2 | GoSecretScanv2 (LLM) | Gitleaks | TruffleHog |
-|---------|----------------|----------------------|----------|------------|
-| **LLM Verification** | ❌ | ✅ Granite 4.0 Micro | ❌ | ❌ |
-| **Entropy Analysis** | ✅ Shannon entropy | ✅ Shannon entropy | ⚠️ Limited | ✅ Yes |
-| **Context Awareness** | ✅ Test/comment detection | ✅ Advanced code parsing | ❌ None | ⚠️ Basic |
-| **Confidence Scoring** | ✅ 4-level system | ✅ LLM-enhanced | ❌ Binary | ⚠️ Limited |
-| **Smart Filtering** | ✅ Auto-filters | ✅ AI-powered | ⚠️ Manual allowlist | ⚠️ Manual |
-| **Semantic Search** | ❌ | ✅ Vector embeddings | ❌ | ❌ |
-| **Historical Learning** | ❌ | ✅ Vector database | ❌ | ❌ |
-| **Pattern Detection** | ✅ Self-aware | ✅ Self-aware | ❌ | ❌ |
-| **Output Grouping** | ✅ By severity | ✅ By severity | ⚠️ Flat list | ⚠️ Flat list |
-| **Performance** | ✅ Pre-compiled | ✅ Optimized | ✅ Good | ✅ Good |
-| **Dependencies** | ✅ Zero (stdlib only) | ✅ Minimal (SQLite) | ⚠️ Requires Git | ⚠️ Multiple |
-| **False Positive Rate** | ~2-5% | **<1%** | ~10-20% | ~5-15% |
+- Regex patterns are compiled once during startup.
+- Files are scanned concurrently using a bounded worker pool.
+- Common directories such as `.git` and `node_modules` are skipped automatically.
+- Files are streamed line-by-line to limit memory usage.
 
-## Performance Considerations
+## Current Limitations
 
-- **Pre-compiled Patterns**: Regex patterns are compiled once at startup, not on every match
-- **Concurrent Processing**: Multiple files are scanned simultaneously using goroutines
-- **Smart Ignoring**: Automatically skips `.git` and `node_modules` directories
-- **Memory Efficient**: Streams file contents line-by-line rather than loading entire files
-
-## Limitations
-
-- Currently scans all file types (including binaries)
-- No configuration file support yet
-- No custom pattern support without code modification
-- No allowlist/whitelist for false positives
+- Binary files are not automatically filtered.
+- Configuration files for custom settings are not yet supported.
+- Custom patterns require code changes.
+- Allowlists/whitelists must currently be handled outside the tool.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome via pull requests.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Inspired by tools like gitleaks, truffleHog, and git-secrets
-- Built with Go's powerful standard library
-
-## Roadmap
-
-- [ ] Configuration file support (YAML/JSON)
-- [ ] Custom pattern definitions
-- [ ] Multiple output formats (JSON, SARIF)
-- [ ] Allowlist/whitelist support
-- [ ] Binary file detection and skipping
-- [ ] Interactive mode for reviewing findings
-- [ ] Entropy-based detection for unknown secrets
-- [ ] Docker image for easy deployment
+This project is licensed under the MIT License; see [LICENSE](LICENSE) for details.
 
 ## Support
 
-For bugs and feature requests, please open an issue on [GitHub](https://github.com/m1rl0k/GoSecretScanv2/issues).
+Please open an issue on [GitHub](https://github.com/m1rl0k/GoSecretScanv2/issues) for bugs or feature requests.
