@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
-	"strings"
 )
 
 const (
@@ -18,7 +17,8 @@ const (
 	SeparatorLine = "------------------------------------------------------------------------"
 )
 
-var secretPatterns = []string{
+var (
+	secretPatterns = []string{
     `(?i)_(Private_Key):[-]{5}BEGIN\\s(?:[DR]SA|OPENSSH|EC|PGP)\\sPRIVATE\\sKEY(?:\\sBLOCK)?[-]{5}`,
     `(?i)_(AWS_Key):[\\s'\"=]A[KS]IA[0-9A-Z]{16}[\\s'\"]`,
     `(?i)_(AWS_Key_line_end):[\\s=]A[KS]IA[0-9A-Z]{16}$`,
@@ -69,8 +69,10 @@ var secretPatterns = []string{
     `(?i)_(Password_primary):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret)\\sprimary[=]['\"]([^\\sa-z;'\",\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})(?:['"\\s;,\"]|$)`,
     `(?i)encryPublicKey\s*=\s*\"([A-Za-z0-9+/=\r\n]+)\"`,
     `(?i)decryPrivateKey\s*=\s*\"([A-Za-z0-9+/=\r\n]+)\"`,
-
-}
+	}
+	// Pre-compiled regex patterns for performance
+	compiledPatterns []*regexp.Regexp
+)
 
 type Secret struct {
 	File       string
@@ -82,6 +84,12 @@ type Secret struct {
 func init() {
 	additionalPatterns := AdditionalSecretPatterns()
 	secretPatterns = append(secretPatterns, additionalPatterns...)
+
+	// Pre-compile all regex patterns for performance
+	compiledPatterns = make([]*regexp.Regexp, len(secretPatterns))
+	for i, pattern := range secretPatterns {
+		compiledPatterns[i] = regexp.MustCompile(pattern)
+	}
 }
 
 func main() {
@@ -149,8 +157,7 @@ func scanFileForSecrets(path string) ([]Secret, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		for index, pattern := range secretPatterns {
-			re := regexp.MustCompile(pattern)
+		for index, re := range compiledPatterns {
 			match := re.FindStringSubmatch(line)
 
 			if len(match) > 0 {
@@ -162,7 +169,7 @@ func scanFileForSecrets(path string) ([]Secret, error) {
 					File:       fmt.Sprintf("%s (%s)", path, secretType),
 					LineNumber: lineNumber,
 					Line:       line,
-					Type:       pattern,
+					Type:       secretPatterns[index],
 				})
 				break
 			}
@@ -222,5 +229,5 @@ func shouldIgnore(path string) bool {
 			return true
 		}
 	}
-	return strings.HasSuffix(path, "main.go")
+	return false
 }
