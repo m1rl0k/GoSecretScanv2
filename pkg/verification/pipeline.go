@@ -27,7 +27,7 @@ type Config struct {
 	Enabled             bool
 	DBPath              string
 	ModelPath           string
-	EmbeddingsPath      string  // Path to embeddings models directory
+	EmbeddingsPath      string // Path to embeddings models directory
 	SimilarityThreshold float32
 	EphemeralStore      bool
 	LLMEndpoint         string

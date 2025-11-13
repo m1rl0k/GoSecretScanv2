@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	ort "github.com/yalue/onnxruntime_go"
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
+	ort "github.com/yalue/onnxruntime_go"
 )
 
 // EmbeddingGenerator generates embeddings for text using BGE model
@@ -43,12 +43,12 @@ func (e *EmbeddingGenerator) Initialize(modelsDir string) error {
 	// Set ONNX Runtime library path
 	// Try both the versioned and symlinked names
 	libPaths := []string{
-		filepath.Join(modelsDir, "libonnxruntime.dylib"),      // macOS symlink
+		filepath.Join(modelsDir, "libonnxruntime.dylib"),        // macOS symlink
 		filepath.Join(modelsDir, "libonnxruntime.1.22.0.dylib"), // macOS versioned
 		filepath.Join(modelsDir, "libonnxruntime.1.20.1.dylib"), // macOS old version
-		filepath.Join(modelsDir, "libonnxruntime.so"),         // Linux symlink
-		filepath.Join(modelsDir, "libonnxruntime.so.1.22.0"),  // Linux versioned
-		filepath.Join(modelsDir, "libonnxruntime.so.1.20.1"),  // Linux old version
+		filepath.Join(modelsDir, "libonnxruntime.so"),           // Linux symlink
+		filepath.Join(modelsDir, "libonnxruntime.so.1.22.0"),    // Linux versioned
+		filepath.Join(modelsDir, "libonnxruntime.so.1.20.1"),    // Linux old version
 	}
 
 	libFound := false
