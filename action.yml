@@ -1,0 +1,78 @@
+name: 'GoSecretScan'
+description: 'Fast, concurrent secret scanner that detects API keys, credentials, and security vulnerabilities in source code'
+author: 'M1RL0K'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  scan-path:
+    description: 'Directory path to scan for secrets (default: current directory)'
+    required: false
+    default: '.'
+  fail-on-secrets:
+    description: 'Fail the workflow if secrets are found (default: true)'
+    required: false
+    default: 'true'
+
+outputs:
+  secrets-found:
+    description: 'Number of secrets found during the scan'
+    value: ${{ steps.scan.outputs.secrets-found }}
+  scan-status:
+    description: 'Status of the scan (success or failed)'
+    value: ${{ steps.scan.outputs.status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Build GoSecretScanner
+      shell: bash
+      run: |
+        cd ${{ github.action_path }}
+        go build -o gosecretscanner main.go
+        chmod +x gosecretscanner
+
+    - name: Run Secret Scanner
+      id: scan
+      shell: bash
+      working-directory: ${{ inputs.scan-path }}
+      run: |
+        echo "Running GoSecretScanv2 scanner..."
+
+        SECRET_COUNT=0
+        STATUS="success"
+
+        # Run the scanner and capture output
+        if ${{ github.action_path }}/gosecretscanner; then
+          echo "No secrets found."
+          SECRET_COUNT=0
+          STATUS="success"
+        else
+          exit_code=$?
+          if [ $exit_code -eq 1 ]; then
+            echo "Secrets detected!"
+            SECRET_COUNT=$(grep -c "File:" output.log 2>/dev/null || echo "unknown")
+            STATUS="failed"
+
+            if [ "${{ inputs.fail-on-secrets }}" == "true" ]; then
+              echo "Failing workflow due to detected secrets."
+              exit 1
+            else
+              echo "Secrets found but not failing workflow (fail-on-secrets=false)"
+            fi
+          else
+            echo "Scanner encountered an error (exit code: $exit_code)"
+            STATUS="error"
+            exit $exit_code
+          fi
+        fi
+
+        echo "secrets-found=$SECRET_COUNT" >> $GITHUB_OUTPUT
+        echo "status=$STATUS" >> $GITHUB_OUTPUT

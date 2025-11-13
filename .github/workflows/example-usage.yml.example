@@ -1,0 +1,47 @@
+# Example workflow showing how to use GoSecretScan as a reusable action
+# Copy this file to your repository's .github/workflows/ directory
+
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  secret-scan:
+    name: Scan for Secrets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Option 1: Use from GitHub (recommended for external users)
+      - name: Run GoSecretScan
+        uses: m1rl0k/GoSecretScanv2@main
+        with:
+          scan-path: '.'
+          fail-on-secrets: 'true'
+
+      # Option 2: Use locally (if action.yml is in your repo)
+      # - name: Run GoSecretScan
+      #   uses: ./
+      #   with:
+      #     scan-path: '.'
+      #     fail-on-secrets: 'true'
+
+      # Option 3: Scan specific directory
+      # - name: Run GoSecretScan on src/
+      #   uses: m1rl0k/GoSecretScanv2@main
+      #   with:
+      #     scan-path: './src'
+      #     fail-on-secrets: 'true'
+
+      # You can also check the output
+      # - name: Check scan results
+      #   if: always()
+      #   run: |
+      #     echo "Secrets found: ${{ steps.scan.outputs.secrets-found }}"
+      #     echo "Scan status: ${{ steps.scan.outputs.status }}"
