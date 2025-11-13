@@ -84,6 +84,9 @@ A next-generation, AI-powered security scanner that detects secrets, API keys, c
 # Point to a remote llama.cpp endpoint
 ./gosecretscanner --llm --llm-endpoint=http://localhost:8080
 
+# Run the llama.cpp server in the background via Docker
+DETACH=true PORT=8080 ./scripts/run-llama-server.sh
+
 # Adjust similarity threshold for vector search
 ./gosecretscanner --llm --similarity=0.9
 ```
@@ -99,6 +102,9 @@ export GOSECRETSCANNER_MODEL_PATH=.gosecretscanner/models/granite-4.0-micro.Q4_K
 
 # Override the llama.cpp endpoint (defaults to http://localhost:8080)
 export GOSECRETSCANNER_LLM_ENDPOINT=http://localhost:8080
+
+# Launch llama.cpp in detached mode with a custom image/port
+DETACH=true LLAMA_CPP_IMAGE=ghcr.io/ggerganov/llama.cpp:full PORT=8080 ./scripts/run-llama-server.sh
 
 # Set vector database path
 export GOSECRETSCANNER_DB_PATH=.gosecretscanner/findings.db
@@ -142,6 +148,27 @@ docker build -t gosecretscanner .
 
 # Run the scanner on current directory
 docker run --rm -v $(pwd):/workspace gosecretscanner
+
+### GitHub Actions
+
+The bundled `action.yml` now supports full LLM verification. Key inputs:
+
+- `enable-llm`: set to `'true'` to download Granite, launch llama.cpp via Docker, and run the scan with `--llm`.
+- `model-path`: overrides the GGUF path (relative to the action directory by default).
+- `llm-endpoint` / `llm-port`: control how the scanner reaches the llama.cpp HTTP server.
+- `llama-image`: change the Docker image used to serve Granite (default `ghcr.io/ggerganov/llama.cpp:full`).
+
+Example workflow step:
+
+```yaml
+      - name: Run GoSecretScan Action with LLM
+        uses: ./
+        with:
+          scan-path: '.'
+          fail-on-secrets: 'false'
+          enable-llm: 'true'
+          llm-port: '8080'
+```
 
 # Run on specific directory
 docker run --rm -v /path/to/scan:/workspace gosecretscanner

@@ -15,6 +15,26 @@ inputs:
     description: 'Fail the workflow if secrets are found (default: true)'
     required: false
     default: 'true'
+  enable-llm:
+    description: 'Enable LLM-powered verification (requires Docker)'
+    required: false
+    default: 'false'
+  model-path:
+    description: 'Path to the Granite GGUF model (relative to repo by default)'
+    required: false
+    default: '.gosecretscanner/models/granite-4.0-micro.Q4_K_M.gguf'
+  llm-endpoint:
+    description: 'HTTP endpoint for llama.cpp server (defaults to localhost)'
+    required: false
+    default: ''
+  llm-port:
+    description: 'Host port to expose the llama.cpp server on'
+    required: false
+    default: '8080'
+  llama-image:
+    description: 'Docker image to launch llama.cpp server'
+    required: false
+    default: 'ghcr.io/ggerganov/llama.cpp:full'
 
 outputs:
   secrets-found:
@@ -30,7 +50,7 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.24.7'
 
     - name: Build GoSecretScanner
       shell: bash
@@ -38,6 +58,54 @@ runs:
         cd ${{ github.action_path }}
         go build -o gosecretscanner main.go
         chmod +x gosecretscanner
+
+    - name: Download Granite model (LLM)
+      if: inputs.enable-llm == 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: ./scripts/download-models.sh
+
+    - name: Start llama.cpp server
+      if: inputs.enable-llm == 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        MODEL_PATH_INPUT: ${{ inputs.model-path }}
+        PORT: ${{ inputs.llm-port }}
+        LLAMA_CPP_IMAGE: ${{ inputs.llama-image }}
+      run: |
+        MODEL_PATH="$MODEL_PATH_INPUT"
+        if [[ "$MODEL_PATH" != /* ]]; then
+          MODEL_PATH="${{ github.action_path }}/$MODEL_PATH"
+        fi
+        export MODEL_PATH
+        export PORT
+        export LLAMA_CPP_IMAGE
+        export DETACH="true"
+        export CONTAINER_NAME="gosecretscanner-llm"
+        ./scripts/run-llama-server.sh
+
+    - name: Wait for llama.cpp server
+      if: inputs.enable-llm == 'true'
+      shell: bash
+      env:
+        LLM_ENDPOINT_INPUT: ${{ inputs.llm-endpoint }}
+        LLM_PORT: ${{ inputs.llm-port }}
+      run: |
+        ENDPOINT="$LLM_ENDPOINT_INPUT"
+        if [ -z "$ENDPOINT" ]; then
+          ENDPOINT="http://127.0.0.1:$LLM_PORT"
+        fi
+        for i in $(seq 1 30); do
+          if curl -fsS "$ENDPOINT/health" >/dev/null 2>&1 || curl -fsS "$ENDPOINT/v1/models" >/dev/null 2>&1; then
+            echo "llama.cpp server is ready"
+            exit 0
+          fi
+          echo "Waiting for llama.cpp server on $ENDPOINT ..."
+          sleep 2
+        done
+        echo "llama.cpp server did not become ready in time" >&2
+        exit 1
 
     - name: Run Secret Scanner
       id: scan
@@ -49,8 +117,22 @@ runs:
         SECRET_COUNT=0
         STATUS="success"
 
+        SCAN_CMD=("${{ github.action_path }}/gosecretscanner")
+
+        if [ "${{ inputs.enable-llm }}" == "true" ]; then
+          MODEL_PATH="${{ inputs.model-path }}"
+          if [[ "$MODEL_PATH" != /* ]]; then
+            MODEL_PATH="${{ github.action_path }}/$MODEL_PATH"
+          fi
+          LLM_ENDPOINT="${{ inputs.llm-endpoint }}"
+          if [ -z "$LLM_ENDPOINT" ]; then
+            LLM_ENDPOINT="http://127.0.0.1:${{ inputs.llm-port }}"
+          fi
+          SCAN_CMD+=("--llm" "--model-path=$MODEL_PATH" "--llm-endpoint=$LLM_ENDPOINT")
+        fi
+
         # Run the scanner and capture output
-        if ${{ github.action_path }}/gosecretscanner; then
+        if "${SCAN_CMD[@]}"; then
           echo "No secrets found."
           SECRET_COUNT=0
           STATUS="success"
@@ -76,3 +158,9 @@ runs:
 
         echo "secrets-found=$SECRET_COUNT" >> $GITHUB_OUTPUT
         echo "status=$STATUS" >> $GITHUB_OUTPUT
+
+    - name: Stop llama.cpp server
+      if: inputs.enable-llm == 'true' && always()
+      shell: bash
+      run: |
+        docker rm -f gosecretscanner-llm >/dev/null 2>&1 || true
