@@ -63,11 +63,53 @@ else
     echo "✓ Downloaded: $GRANITE_FILE ($(du -h "$GRANITE_FILE" | cut -f1))"
 fi
 
-# BGE Embeddings Model (Optional - for future use)
-# For now, we use hash-based embeddings
+# BGE Embeddings Model (ONNX)
 echo ""
-echo "Note: Using hash-based embeddings (no download needed)"
-echo "To enable BGE embeddings, download BAAI/bge-small-en-v1.5 ONNX model"
+echo "Downloading BGE-small-en-v1.5 ONNX model (~100MB)..."
+
+BGE_MODEL_URL="https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx"
+BGE_TOKENIZER_URL="https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/tokenizer.json"
+BGE_MODEL_FILE="$MODELS_DIR/bge-small-en-v1.5.onnx"
+BGE_TOKENIZER_FILE="$MODELS_DIR/bge-tokenizer.json"
+
+if [ -s "$BGE_MODEL_FILE" ] && [ -s "$BGE_TOKENIZER_FILE" ]; then
+    echo "✓ BGE model and tokenizer already present"
+else
+    echo "Downloading BGE ONNX model..."
+    tmp_model="${BGE_MODEL_FILE}.partial"
+    tmp_tokenizer="${BGE_TOKENIZER_FILE}.partial"
+
+    CURL_ARGS=("-L" "--fail" "--retry" "5" "--retry-delay" "2" "--progress-bar")
+    if [ -n "${HF_TOKEN:-}" ]; then
+        CURL_ARGS+=("-H" "Authorization: Bearer ${HF_TOKEN}")
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl "${CURL_ARGS[@]}" -o "$tmp_model" "$BGE_MODEL_URL"
+        curl "${CURL_ARGS[@]}" -o "$tmp_tokenizer" "$BGE_TOKENIZER_URL"
+    elif command -v wget >/dev/null 2>&1; then
+        WGET_ARGS=("--tries=5" "--timeout=30" "--show-progress")
+        if [ -n "${HF_TOKEN:-}" ]; then
+            WGET_ARGS+=("--header=Authorization: Bearer ${HF_TOKEN}")
+        fi
+        wget "${WGET_ARGS[@]}" "$BGE_MODEL_URL" -O "$tmp_model"
+        wget "${WGET_ARGS[@]}" "$BGE_TOKENIZER_URL" -O "$tmp_tokenizer"
+    else
+        echo "Error: Neither curl nor wget found."
+        exit 1
+    fi
+
+    if [ ! -s "$tmp_model" ] || [ ! -s "$tmp_tokenizer" ]; then
+        echo "Error: Downloaded files are empty."
+        rm -f "$tmp_model" "$tmp_tokenizer"
+        exit 1
+    fi
+
+    mv -f "$tmp_model" "$BGE_MODEL_FILE"
+    mv -f "$tmp_tokenizer" "$BGE_TOKENIZER_FILE"
+    echo "✓ Downloaded BGE model: $BGE_MODEL_FILE ($(du -h "$BGE_MODEL_FILE" | cut -f1))"
+    echo "✓ Downloaded BGE tokenizer: $BGE_TOKENIZER_FILE"
+fi
 
 echo ""
 echo "=== Download Complete ==="

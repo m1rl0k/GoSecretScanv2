@@ -3,6 +3,7 @@ package verification
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/m1rl0k/GoSecretScanv2/pkg/embeddings"
@@ -41,6 +42,15 @@ func NewPipeline(config *Config) (*Pipeline, error) {
 	codeParser := parser.NewCodeParser(config.Enabled)
 
 	embeddingGen := embeddings.NewEmbeddingGenerator(config.Enabled)
+
+	// Initialize BGE embeddings with ONNX model
+	if config.Enabled && config.ModelPath != "" {
+		modelsDir := filepath.Dir(config.ModelPath)
+		if err := embeddingGen.Initialize(modelsDir); err != nil {
+			// Non-fatal: fall back to hash-based embeddings
+			fmt.Printf("Warning: failed to initialize BGE embeddings, using hash-based fallback: %v\n", err)
+		}
+	}
 
 	vectorStore, err := vectorstore.NewVectorStore(config.DBPath, config.Enabled, config.EphemeralStore)
 	if err != nil {
@@ -182,6 +192,12 @@ func (p *Pipeline) findFunction(parsed *parser.ParsedCode, lineNumber int) strin
 
 // Close releases pipeline resources
 func (p *Pipeline) Close() error {
+	if p.embeddings != nil {
+		if err := p.embeddings.Close(); err != nil {
+			return err
+		}
+	}
+
 	if p.vectorStore != nil {
 		if err := p.vectorStore.Close(); err != nil {
 			return err

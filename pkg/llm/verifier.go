@@ -123,7 +123,6 @@ Context:
 - Language: %s
 - Function: %s
 - Line: %d
-- Is Test File: %v
 
 Matched line (exact line that triggered the detection):
 `+"```"+`
@@ -140,7 +139,7 @@ Question: Is this a real secret that should be reported, or a false positive?
 
 Consider:
 1. Is the value hardcoded or from an environment variable?
-2. Is this in a test file or production code?
+2. Does the value format match a real secret pattern?
 3. Is the entropy high enough to be a real secret?
 4. Could this be example/template code?
 5. Is the pattern in a sensitive location?
@@ -158,7 +157,6 @@ Answer with JSON only, no code fences or extra text:
 		context.Language,
 		context.Function,
 		finding.LineNumber,
-		context.IsTest,
 		context.SurroundingCode,
 		finding.PatternType,
 		finding.Match,
@@ -277,13 +275,6 @@ func (v *LLMVerifier) heuristicVerify(finding *Finding, context *CodeContext) *V
 	confidence := finding.Confidence
 	reasoning := []string{}
 
-	// Test file check
-	if context.IsTest {
-		isReal = false
-		reasoning = append(reasoning, "Found in test file")
-		confidence = "low"
-	}
-
 	// Documentation files are generally examples; lower severity/ignore
 	lowerPath := strings.ToLower(finding.FilePath)
 	if strings.HasSuffix(lowerPath, ".md") || strings.HasSuffix(lowerPath, ".rst") || strings.Contains(lowerPath, "/docs/") {
@@ -327,10 +318,10 @@ func (v *LLMVerifier) heuristicVerify(finding *Finding, context *CodeContext) *V
 		confidence = "low"
 	}
 
-	// High entropy in production code
-	if finding.Entropy > 4.5 && !context.IsTest && finding.Context == "code" {
+	// High entropy in code
+	if finding.Entropy > 4.5 && finding.Context == "code" {
 		isReal = true
-		reasoning = append(reasoning, fmt.Sprintf("High entropy (%.2f) in production code", finding.Entropy))
+		reasoning = append(reasoning, fmt.Sprintf("High entropy (%.2f) in code", finding.Entropy))
 		confidence = "critical"
 	}
 

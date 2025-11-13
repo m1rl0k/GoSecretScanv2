@@ -303,8 +303,24 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 
 				// Extract the actual matched secret for analysis
 				matchedSecret := match[0]
-				if len(match) > 1 && match[1] != "" {
-					matchedSecret = match[1] // Use captured group if available
+				// Prefer the most secret-looking capture group instead of the first (some patterns use a label group)
+				if len(match) > 1 {
+					best := ""
+					bestEntropy := -1.0
+					for i := 1; i < len(match); i++ {
+						cand := strings.TrimSpace(match[i])
+						if cand == "" {
+							continue
+						}
+						ent := calculateEntropy(cand)
+						if ent > bestEntropy || (math.Abs(ent-bestEntropy) < 0.01 && len(cand) > len(best)) {
+							bestEntropy = ent
+							best = cand
+						}
+					}
+					if best != "" {
+						matchedSecret = best
+					}
 				}
 
 				// Calculate entropy of the matched secret
@@ -499,8 +515,8 @@ func detectContext(path, line string) string {
 	lineLower := strings.ToLower(line)
 	lineUpper := strings.ToUpper(line)
 
-	// Test file detection
-	testPatterns := []string{"test", "spec", "mock", "fixture", "example", "sample", "demo"}
+	// Test file detection (treat real test scaffolding as tests; do not down-rank examples/demo)
+	testPatterns := []string{"test", "spec", "mock", "fixture"}
 	for _, pattern := range testPatterns {
 		if strings.Contains(pathLower, pattern) {
 			return "test_file"
@@ -557,8 +573,6 @@ func calculateConfidence(match string, entropy float64, context string, patternT
 
 	// Context scoring
 	switch context {
-	case "test_file":
-		score -= 40
 	case "comment":
 		score -= 30
 	case "documentation":

@@ -1,16 +1,23 @@
 package embeddings
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+
+	ort "github.com/yalue/onnxruntime_go"
+	"github.com/sugarme/tokenizer"
+	"github.com/sugarme/tokenizer/pretrained"
 )
 
-// EmbeddingGenerator generates embeddings for text
+// EmbeddingGenerator generates embeddings for text using BGE model
 type EmbeddingGenerator struct {
 	enabled   bool
 	dimension int
+	session   *ort.AdvancedSession
+	tokenizer *tokenizer.Tokenizer
+	modelPath string
 }
 
 // NewEmbeddingGenerator creates a new embedding generator
@@ -21,35 +28,140 @@ func NewEmbeddingGenerator(enabled bool) *EmbeddingGenerator {
 	}
 }
 
+// Initialize loads the ONNX model and tokenizer
+func (e *EmbeddingGenerator) Initialize(modelsDir string) error {
+	if !e.enabled {
+		return nil
+	}
+
+	// Initialize ONNX runtime
+	if err := ort.InitializeEnvironment(); err != nil {
+		return fmt.Errorf("failed to initialize ONNX runtime: %w", err)
+	}
+
+	// Load BGE model
+	modelPath := filepath.Join(modelsDir, "bge-small-en-v1.5.onnx")
+	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
+		return fmt.Errorf("BGE model not found at %s. Run scripts/download-models.sh", modelPath)
+	}
+
+	e.modelPath = modelPath
+
+	// Create ONNX session
+	session, err := ort.NewAdvancedSession(modelPath,
+		[]string{"input_ids", "attention_mask", "token_type_ids"},
+		[]string{"last_hidden_state"},
+		nil)
+	if err != nil {
+		return fmt.Errorf("failed to create ONNX session: %w", err)
+	}
+	e.session = session
+
+	// Load tokenizer
+	tokenizerPath := filepath.Join(modelsDir, "bge-tokenizer.json")
+	if _, err := os.Stat(tokenizerPath); os.IsNotExist(err) {
+		return fmt.Errorf("BGE tokenizer not found at %s. Run scripts/download-models.sh", tokenizerPath)
+	}
+
+	tk, err := pretrained.FromFile(tokenizerPath)
+	if err != nil {
+		return fmt.Errorf("failed to load tokenizer: %w", err)
+	}
+	e.tokenizer = tk
+
+	return nil
+}
+
 // Generate creates an embedding vector for the given text
 func (e *EmbeddingGenerator) Generate(text string) ([]float32, error) {
-	if !e.enabled {
+	if !e.enabled || e.session == nil || e.tokenizer == nil {
+		// Fall back to simple hash if not initialized
 		return e.simpleHash(text), nil
 	}
 
-	// Future: Use BAAI BGE model here via ONNX runtime
-	return e.simpleHash(text), nil
-}
-
-// simpleHash creates a deterministic pseudo-embedding using hashing
-// This is a placeholder until we integrate the actual BGE model
-func (e *EmbeddingGenerator) simpleHash(text string) []float32 {
-	embedding := make([]float32, e.dimension)
-
-	// Use SHA256 to create a deterministic hash
-	hash := sha256.Sum256([]byte(text))
-
-	// Convert hash bytes to float32 values
-	for i := 0; i < e.dimension; i++ {
-		// Use different parts of the hash with different seeds
-		byteIdx := (i * 4) % len(hash)
-		val := binary.BigEndian.Uint32(hash[byteIdx:])
-
-		// Normalize to [-1, 1] range
-		embedding[i] = float32(val)/float32(math.MaxUint32)*2.0 - 1.0
+	// Tokenize input
+	encoding, err := e.tokenizer.EncodeSingle(text)
+	if err != nil {
+		return nil, fmt.Errorf("failed to tokenize: %w", err)
 	}
 
-	// Normalize the vector
+	ids := encoding.GetIds()
+	attentionMask := encoding.GetAttentionMask()
+	tokenTypeIds := encoding.GetTypeIds()
+
+	// Prepare input tensors
+	inputIDs := make([]int64, len(ids))
+	for i, id := range ids {
+		inputIDs[i] = int64(id)
+	}
+
+	attention := make([]int64, len(attentionMask))
+	for i, mask := range attentionMask {
+		attention[i] = int64(mask)
+	}
+
+	tokenTypes := make([]int64, len(tokenTypeIds))
+	for i, typeID := range tokenTypeIds {
+		tokenTypes[i] = int64(typeID)
+	}
+
+	// Create input shape [1, sequence_length]
+	shape := ort.NewShape(1, int64(len(inputIDs)))
+
+	inputIDsTensor, err := ort.NewTensor(shape, inputIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create input IDs tensor: %w", err)
+	}
+	defer inputIDsTensor.Destroy()
+
+	attentionTensor, err := ort.NewTensor(shape, attention)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create attention mask tensor: %w", err)
+	}
+	defer attentionTensor.Destroy()
+
+	tokenTypesTensor, err := ort.NewTensor(shape, tokenTypes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token types tensor: %w", err)
+	}
+	defer tokenTypesTensor.Destroy()
+
+	// Run inference
+	outputs, err := e.session.Run([]ort.ArbitraryTensor{
+		inputIDsTensor,
+		attentionTensor,
+		tokenTypesTensor,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to run ONNX inference: %w", err)
+	}
+	defer outputs[0].Destroy()
+
+	// Extract embeddings (CLS token pooling - first token)
+	outputData := outputs[0].GetData().([]float32)
+
+	// The output shape is [batch_size, sequence_length, hidden_dim]
+	// We take the CLS token (first token) embedding
+	embedding := outputData[:e.dimension]
+
+	// Normalize the embedding
+	return normalize(embedding), nil
+}
+
+// simpleHash creates a deterministic pseudo-embedding using hashing (fallback)
+func (e *EmbeddingGenerator) simpleHash(text string) []float32 {
+	// Use the same hash-based approach as before for fallback
+	embedding := make([]float32, e.dimension)
+
+	// Simple character-based hashing
+	for i := 0; i < e.dimension; i++ {
+		val := 0.0
+		for j, c := range text {
+			val += float64(c) * math.Sin(float64(i+j))
+		}
+		embedding[i] = float32(math.Sin(val))
+	}
+
 	return normalize(embedding)
 }
 
@@ -96,4 +208,14 @@ func CosineSimilarity(a, b []float32) (float32, error) {
 // Dimension returns the embedding dimension
 func (e *EmbeddingGenerator) Dimension() int {
 	return e.dimension
+}
+
+// Close releases resources
+func (e *EmbeddingGenerator) Close() error {
+	if e.session != nil {
+		if err := e.session.Destroy(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
