@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -299,6 +300,13 @@ func (v *LLMVerifier) heuristicVerify(finding *Finding, context *CodeContext) *V
 		reasoning = append(reasoning, "Uses environment variable pattern")
 	}
 
+	// Reserved/safe IP addresses are not secrets (127.0.0.1, 0.0.0.0, RFC1918 ranges)
+	if isReservedIP(finding.Match) {
+		isReal = false
+		reasoning = append(reasoning, "Reserved IP/address (not a secret)")
+		confidence = "low"
+	}
+
 	// Low entropy check
 	if finding.Entropy < 3.0 {
 		isReal = false
@@ -349,6 +357,37 @@ func (v *LLMVerifier) BatchVerify(findings []*Finding, contexts []*CodeContext) 
 	}
 
 	return results, nil
+}
+
+// isReservedIP returns true for loopback, unspecified, and RFC1918 private ranges
+func isReservedIP(s string) bool {
+	val := strings.TrimSpace(s)
+	if val == "" {
+		return false
+	}
+	if val == "0.0.0.0" {
+		return true
+	}
+	ip := net.ParseIP(val)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	// Only IPv4 private ranges
+	if ip4 := ip.To4(); ip4 != nil {
+		if ip4[0] == 10 { // 10.0.0.0/8
+			return true
+		}
+		if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 { // 172.16.0.0/12
+			return true
+		}
+		if ip4[0] == 192 && ip4[1] == 168 { // 192.168.0.0/16
+			return true
+		}
+	}
+	return false
 }
 
 // parseResponse parses the LLM's JSON response
