@@ -76,6 +76,13 @@ var (
 		`(?i)_(Password_primary):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret)\\sprimary[=]['\"]([^\\sa-z;'\",\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})(?:['"\\s;,\"]|$)`,
 		`(?i)encryPublicKey\s*=\s*\"([A-Za-z0-9+/=\r\n]+)\"`,
 		`(?i)decryPrivateKey\s*=\s*\"([A-Za-z0-9+/=\r\n]+)\"`,
+		`(?i)_(GCP_API_Key2):\\bAIza[0-9A-Za-z_-]{29,45}\\b`,
+		`(?i)_(Stripe_Secret):\\bsk_(?:live|test)_[0-9A-Za-z]{24,}\\b`,
+		`(?i)_(Slack_Token_Generic):\\bxox(?:p|b|o|a|r)-[0-9A-Za-z-]{10,}\\b`,
+		`(?i)_(Private_Key_Begin):^-{5}BEGIN\\sPRIVATE\\sKEY-{5}`,
+		`(?i)_(DB_URI_With_Creds):\\b(?:postgres|mysql|mariadb|mongodb|redis)://[^:\\s]+:[^@\\s]+@[^/\\s]+`,
+		`(?i)_(AWS_AKIA):\\bAKIA[0-9A-Z]{16}\\b`,
+		`(?i)_(GitHub_PAT):\\bghp_[A-Za-z0-9]{30,}\\b`,
 	}
 	// Pre-compiled regex patterns for performance
 	compiledPatterns []*regexp.Regexp
