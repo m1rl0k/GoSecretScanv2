@@ -93,6 +93,7 @@ runs:
         export SERVER_PORT
         export HOST_NETWORK
         export HOST_IP
+        export WAIT_READY="false"
         ./scripts/run-llama-server.sh
 
     - name: Wait for llama.cpp server
