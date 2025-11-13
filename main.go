@@ -521,7 +521,6 @@ func calculateEntropy(s string) float64 {
 // detectContext analyzes the line and file to determine context
 func detectContext(path, line string) string {
 	pathLower := strings.ToLower(path)
-	lineLower := strings.ToLower(line)
 	lineUpper := strings.ToUpper(line)
 
 	// Test file detection (treat real test scaffolding as tests; do not down-rank examples/demo)
@@ -541,11 +540,6 @@ func detectContext(path, line string) string {
 		strings.Contains(line, "<!--") ||
 		strings.Contains(line, "-->") {
 		return "comment"
-	}
-
-	// Documentation detection
-	if strings.Contains(lineLower, "example") || strings.Contains(lineLower, "documentation") {
-		return "documentation"
 	}
 
 	// Environment variable placeholder detection (restrict to ${VAR}, %VAR%, or $VAR)
