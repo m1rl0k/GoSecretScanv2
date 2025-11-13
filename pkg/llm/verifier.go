@@ -123,7 +123,7 @@ Context:
 - Line: %d
 - Is Test File: %v
 
-Code snippet:
+Matched line (exact line that triggered the detection):
 `+"```"+`
 %s
 `+"```"+`
@@ -144,7 +144,8 @@ Consider:
 5. Is the pattern in a sensitive location?
 6. Are there indicators this is a placeholder (YOUR_, REPLACE_, etc.)?
 
-Answer with JSON only:
+Use only the matched line above; do not infer beyond what is shown.
+Answer with JSON only, no code fences or extra text:
 {
   "is_real_secret": true/false,
   "confidence": "low"/"medium"/"high"/"critical",

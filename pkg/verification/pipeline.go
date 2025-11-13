@@ -100,7 +100,7 @@ func (p *Pipeline) VerifyFinding(
 		FilePath:        filePath,
 		Language:        parsed.Language,
 		Function:        p.findFunction(parsed, lineNumber),
-		SurroundingCode: p.parser.GetContext(content, lineNumber, 5),
+		SurroundingCode: line,
 		Imports:         parsed.Imports,
 		IsTest:          parsed.IsTest,
 	}

@@ -316,8 +316,14 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 				// Calculate confidence based on entropy and context
 				confidence := calculateConfidence(matchedSecret, entropy, context, secretPatterns[index])
 
-				// Use LLM verification if available
-				if pipeline != nil && confidence != "low" {
+				// Skip documentation files entirely - they're full of examples
+				isDocFile := strings.HasSuffix(strings.ToLower(path), ".md") ||
+					strings.HasSuffix(strings.ToLower(path), ".rst") ||
+					strings.Contains(strings.ToLower(path), "/docs/") ||
+					strings.Contains(strings.ToLower(path), "\\docs\\")
+
+				// Use LLM verification if available (skip doc files and low confidence)
+				if pipeline != nil && confidence != "low" && !isDocFile {
 					result, err := pipeline.VerifyFinding(
 						path,
 						lineNumber,
@@ -359,8 +365,8 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 							})
 						}
 					}
-				} else if confidence != "low" {
-					// No LLM pipeline or low confidence - use standard detection
+				} else if confidence != "low" && !isDocFile {
+					// No LLM pipeline or low confidence - use standard detection (skip doc files)
 					secrets = append(secrets, Secret{
 						File:       fmt.Sprintf("%s (%s)", path, secretType),
 						LineNumber: lineNumber,
@@ -396,8 +402,8 @@ func AdditionalSecretPatterns() []string {
 		`-----BEGIN\sRSA\sPRIVATE\sKEY-----[\s\S]+-----END\sRSA\sPRIVATE\sKEY-----`,
 		// S3 Bucket URLs
 		`(?i)s3\.amazonaws\.com/[\w\-\.]+`,
-		// Hardcoded IP addresses
-		`\b(?:\d{1,3}\.){3}\d{1,3}\b`,
+		// Note: IP address pattern removed - too many false positives in docs/examples
+		// If needed, filter reserved IPs (127.0.0.1, RFC1918) before reporting
 		// Basic Authentication credentials
 		`(?i)(?:http|https)://\w+:\w+@[\w\-\.]+`,
 		// JWT tokens
