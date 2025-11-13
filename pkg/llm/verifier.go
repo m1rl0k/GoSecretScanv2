@@ -1,17 +1,27 @@
 package llm
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
+)
+
+const (
+	defaultLLMEndpoint = "http://localhost:8080"
+	llamaAPIRoute      = "/v1/chat/completions"
+	llmRequestTimeout  = 45 * time.Second
 )
 
 // VerificationResult represents the LLM's verification result
 type VerificationResult struct {
-	IsRealSecret  bool   `json:"is_real_secret"`
-	Confidence    string `json:"confidence"`
-	Reasoning     string `json:"reasoning"`
+	IsRealSecret   bool   `json:"is_real_secret"`
+	Confidence     string `json:"confidence"`
+	Reasoning      string `json:"reasoning"`
 	Recommendation string `json:"recommendation"`
 }
 
@@ -39,27 +49,40 @@ type Finding struct {
 
 // LLMVerifier handles LLM-based verification
 type LLMVerifier struct {
-	enabled   bool
-	modelPath string
-	// Future: Add llama.cpp context here
+	enabled  bool
+	model    string
+	endpoint string
+	client   *http.Client
 }
 
 // NewLLMVerifier creates a new LLM verifier
-func NewLLMVerifier(modelPath string, enabled bool) (*LLMVerifier, error) {
+func NewLLMVerifier(modelPath string, endpoint string, enabled bool) (*LLMVerifier, error) {
 	if !enabled {
 		return &LLMVerifier{enabled: false}, nil
 	}
 
-	// Check if model exists
+	if modelPath == "" {
+		return nil, fmt.Errorf("model path is required when LLM verification is enabled")
+	}
+
+	// Check if model exists locally so users get fast feedback when running the bundled server
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("model not found at %s: %w", modelPath, err)
 	}
 
-	// Future: Initialize llama.cpp here
+	if endpoint == "" {
+		endpoint = defaultLLMEndpoint
+	}
+
+	endpoint = strings.TrimSuffix(endpoint, "/")
 
 	return &LLMVerifier{
-		enabled:   true,
-		modelPath: modelPath,
+		enabled:  true,
+		model:    modelPath,
+		endpoint: endpoint,
+		client: &http.Client{
+			Timeout: llmRequestTimeout,
+		},
 	}, nil
 }
 
@@ -73,10 +96,17 @@ func (v *LLMVerifier) Verify(finding *Finding, context *CodeContext) (*Verificat
 	// Build prompt
 	prompt := v.buildPrompt(finding, context)
 
-	// Future: Call llama.cpp here
-	// For now, use heuristic
-	_ = prompt
-	return v.heuristicVerify(finding, context), nil
+	if v.endpoint == "" || v.client == nil {
+		return v.heuristicVerify(finding, context), nil
+	}
+
+	result, err := v.invokeLLM(prompt)
+	if err != nil {
+		fmt.Printf("Warning: LLM verification failed, falling back to heuristics: %v\n", err)
+		return v.heuristicVerify(finding, context), nil
+	}
+
+	return result, nil
 }
 
 // buildPrompt creates the prompt for the LLM
@@ -91,9 +121,9 @@ Context:
 - Is Test File: %v
 
 Code snippet:
-` + "```" + `
+`+"```"+`
 %s
-` + "```" + `
+`+"```"+`
 
 Pattern detected: %s
 Matched value: %s
@@ -130,6 +160,86 @@ Answer with JSON only:
 		finding.Context,
 		finding.Confidence,
 	)
+}
+
+type chatRequest struct {
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Temperature float32       `json:"temperature"`
+	TopP        float32       `json:"top_p"`
+	MaxTokens   int           `json:"max_tokens"`
+	Stream      bool          `json:"stream"`
+}
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatResponse struct {
+	Choices []struct {
+		Message chatMessage `json:"message"`
+	} `json:"choices"`
+}
+
+func (v *LLMVerifier) invokeLLM(prompt string) (*VerificationResult, error) {
+	reqBody := chatRequest{
+		Model: v.model,
+		Messages: []chatMessage{
+			{Role: "system", Content: "You are a senior application security engineer. Respond with JSON only."},
+			{Role: "user", Content: prompt},
+		},
+		Temperature: 0.1,
+		TopP:        0.9,
+		MaxTokens:   256,
+		Stream:      false,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal LLM request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), llmRequestTimeout)
+	defer cancel()
+
+	endpoint := v.endpoint + llamaAPIRoute
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build LLM request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("LLM request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("LLM server returned status %s", resp.Status)
+	}
+
+	var completion chatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&completion); err != nil {
+		return nil, fmt.Errorf("failed to decode LLM response: %w", err)
+	}
+
+	if len(completion.Choices) == 0 {
+		return nil, fmt.Errorf("LLM response contained no choices")
+	}
+
+	content := strings.TrimSpace(completion.Choices[0].Message.Content)
+	if content == "" {
+		return nil, fmt.Errorf("LLM response content is empty")
+	}
+
+	var result VerificationResult
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal LLM JSON: %w", err)
+	}
+
+	return &result, nil
 }
 
 // heuristicVerify provides rule-based verification as fallback

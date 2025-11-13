@@ -102,6 +102,7 @@ var (
 	dbPath              = flag.String("db-path", ".gosecretscanner/findings.db", "Path to vector store database")
 	similarityThreshold = flag.Float64("similarity", 0.8, "Similarity threshold for vector search")
 	keepVectorStore     = flag.Bool("keep-vector-store", false, "Keep the vector store database after the run")
+	llmEndpoint         = flag.String("llm-endpoint", "http://localhost:8080", "LLM server endpoint (llama.cpp HTTP API)")
 )
 
 func init() {
@@ -128,6 +129,7 @@ func main() {
 			ModelPath:           *modelPath,
 			SimilarityThreshold: float32(*similarityThreshold),
 			EphemeralStore:      !*keepVectorStore,
+			LLMEndpoint:         *llmEndpoint,
 		}
 
 		var err error

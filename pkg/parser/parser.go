@@ -7,13 +7,13 @@ import (
 
 // ParsedCode represents parsed code structure
 type ParsedCode struct {
-	Language    string
-	Functions   []string
-	Strings     []string
-	Variables   []string
-	Comments    []string
-	IsTest      bool
-	Imports     []string
+	Language  string
+	Functions []string
+	Strings   []string
+	Variables []string
+	Comments  []string
+	IsTest    bool
+	Imports   []string
 }
 
 // CodeParser handles code parsing
@@ -61,15 +61,15 @@ func (p *CodeParser) basicParse(filePath string, content []byte) *ParsedCode {
 
 		// Detect functions
 		if strings.Contains(trimmed, "func ") ||
-		   strings.Contains(trimmed, "def ") ||
-		   strings.Contains(trimmed, "function ") {
+			strings.Contains(trimmed, "def ") ||
+			strings.Contains(trimmed, "function ") {
 			parsed.Functions = append(parsed.Functions, trimmed)
 		}
 
 		// Detect imports
 		if strings.HasPrefix(trimmed, "import ") ||
-		   strings.HasPrefix(trimmed, "from ") ||
-		   strings.HasPrefix(trimmed, "require(") {
+			strings.HasPrefix(trimmed, "from ") ||
+			strings.HasPrefix(trimmed, "require(") {
 			parsed.Imports = append(parsed.Imports, trimmed)
 		}
 	}

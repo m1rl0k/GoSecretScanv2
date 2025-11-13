@@ -137,14 +137,6 @@ func (vs *VectorStore) Store(finding *Finding) error {
 	return nil
 }
 
-func redactSnippet(s string) string {
-	if s == "" {
-		return ""
-	}
-	h := sha256.Sum256([]byte(s))
-	return "HASH:" + hex.EncodeToString(h[:])[:16]
-}
-
 // Search finds similar findings using cosine similarity
 func (vs *VectorStore) Search(embedding []float32, topK int, threshold float32) ([]*Finding, error) {
 	if !vs.enabled {

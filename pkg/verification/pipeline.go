@@ -28,6 +28,7 @@ type Config struct {
 	ModelPath           string
 	SimilarityThreshold float32
 	EphemeralStore      bool
+	LLMEndpoint         string
 }
 
 // NewPipeline creates a new verification pipeline
@@ -46,7 +47,7 @@ func NewPipeline(config *Config) (*Pipeline, error) {
 		return nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
 
-	llmVerifier, err := llm.NewLLMVerifier(config.ModelPath, config.Enabled)
+	llmVerifier, err := llm.NewLLMVerifier(config.ModelPath, config.LLMEndpoint, config.Enabled)
 	if err != nil {
 		// LLM is optional, can fall back to heuristics
 		llmVerifier = &llm.LLMVerifier{}
