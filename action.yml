@@ -74,16 +74,16 @@ runs:
       shell: bash
       working-directory: ${{ github.action_path }}
       env:
-        MODEL_PATH_INPUT: ${{ inputs.model-path }}
         PORT: ${{ inputs.llm-port }}
         LLAMA_CPP_IMAGE: ${{ inputs.llama-image }}
         SERVER_PORT: ${{ inputs.llm-port }}
         HOST_NETWORK: "false"
         HOST_IP: "127.0.0.1"
       run: |
-        MODEL_PATH="$MODEL_PATH_INPUT"
+        # Convert relative path to absolute (working-directory is already github.action_path)
+        MODEL_PATH="${{ inputs.model-path }}"
         if [[ "$MODEL_PATH" != /* ]]; then
-          MODEL_PATH="${{ github.action_path }}/$MODEL_PATH"
+          MODEL_PATH="$(pwd)/$MODEL_PATH"
         fi
         export MODEL_PATH
         export PORT
