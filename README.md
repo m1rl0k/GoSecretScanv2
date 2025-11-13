@@ -1,6 +1,6 @@
 # GoSecretScanv2
 
-A next-generation, AI-powered security scanner that detects secrets, API keys, credentials, and security vulnerabilities with industry-leading precision. Built to outperform tools like gitleaks with advanced entropy analysis and context-aware detection.
+GoSecretScanv2 is an engineering-focused security scanner that detects secrets, API keys, credentials, and common security misconfigurations using deterministic analysis plus optional LLM-based verification.
 
 ## Features
 
@@ -38,21 +38,16 @@ A next-generation, AI-powered security scanner that detects secrets, API keys, c
   - Handles large files and minified code (1MB line buffer)
   - Pattern definition detection
 
-### 🚀 LLM-Powered Verification (BETA)
-
-**Revolutionary AI-powered secret verification using IBM Granite 4.0 Micro**
+### LLM-Powered Verification (beta)
 
 - **LLM Verification**:
   - Uses IBM Granite 4.0 Micro (GGUF, Q4 quantized, ~450MB)
-  - Code-specialized AI model for accurate verification
-  - Reduces false positives to <1%
-  - Provides reasoning for each decision
+  - Provides structured reasoning for each decision
 
 - **Semantic Embedding Search**:
   - Generates embeddings for each finding
-  - Searches for similar patterns across codebase
-  - Learns from historical verifications
-  - Clusters related findings
+  - Searches for similar patterns across the codebase
+  - Reuses historical verifications for similar matches
 
 - **Vector Store**:
   - SQLite-based vector database
@@ -112,17 +107,17 @@ export GOSECRETSCANNER_DB_PATH=.gosecretscanner/findings.db
 
 ### Performance
 
-- **High Performance**:
+- **Runtime characteristics**:
   - Pre-compiled regex patterns for fast scanning
   - Concurrent file processing using goroutines
-  - Thread-safe operations with proper synchronization
-  - Zero external dependencies
+  - Thread-safe result aggregation
+  - Fallback paths that avoid external dependencies when optional components are unavailable
 
-- **Easy to Use**:
-  - Zero configuration required
+- **Operational notes**:
+  - Minimal configuration required for local runs
   - Color-coded terminal output with confidence levels
-  - Automatic recursive directory scanning
-  - Grouped results by severity
+  - Automatic recursive directory scanning with ignore rules
+  - Results grouped by severity to aid triage
 
 ## Installation
 
@@ -149,6 +144,11 @@ docker build -t gosecretscanner .
 # Run the scanner on current directory
 docker run --rm -v $(pwd):/workspace gosecretscanner
 
+# Run on a specific directory
+docker run --rm -v /path/to/scan:/workspace gosecretscanner
+
+```
+
 ### GitHub Actions
 
 The bundled `action.yml` now supports full LLM verification. Key inputs:
@@ -170,10 +170,6 @@ Example workflow step:
           enable-llm: 'true'
           llm-port: '8080'
           manage-llm-server: 'false'
-```
-
-# Run on specific directory
-docker run --rm -v /path/to/scan:/workspace gosecretscanner
 ```
 
 ## Usage
@@ -229,7 +225,7 @@ Summary: 3 secrets found (Critical: 1, High: 1, Medium: 1)
 Please review and remove them before committing your code.
 ```
 
-**Key Features in Output:**
+**Output details:**
 - Results grouped by confidence level (Critical → High → Medium)
 - Entropy score shows randomness (higher = more likely real secret)
 - Context indicates where the secret was found (code, test_file, comment, etc.)
@@ -296,7 +292,7 @@ fi
 
 ### GitHub Actions
 
-This tool is available as a reusable GitHub Action! You can use it in your workflows:
+The repository also exposes a reusable GitHub Action for CI pipelines:
 
 ```yaml
 name: Security Scan
