@@ -79,9 +79,8 @@ var (
 	// Pre-compiled regex patterns for performance
 	compiledPatterns []*regexp.Regexp
 
-// Windows-style env placeholder pattern (e.g., %VAR%)
-var placeholderEnvWinRe = regexp.MustCompile(`%[A-Za-z0-9_]+%`)
-
+	bracePlaceholderPattern   = regexp.MustCompile(`\$\{[^}]+\}`)
+	percentPlaceholderPattern = regexp.MustCompile(`%[A-Za-z0-9_]+%`)
 )
 
 type Secret struct {
@@ -150,6 +149,16 @@ func main() {
 	var secretsFound []Secret
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+
+	// Bounded worker pool for stable scanning on large repos
+	workers := runtime.NumCPU() * 4
+	if workers < 8 {
+		workers = 8
+	}
+	if workers > 64 {
+		workers = 64
+	}
+	sem := make(chan struct{}, workers)
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -480,8 +489,8 @@ func detectContext(path, line string) string {
 		return "documentation"
 	}
 
-	// Environment variable placeholder detection
-	if strings.Contains(lineLower, "${") || strings.Contains(lineLower, "%") {
+	// Environment variable placeholder detection (restrict to ${VAR} or %VAR%)
+	if bracePlaceholderPattern.MatchString(line) || percentPlaceholderPattern.MatchString(line) {
 		return "placeholder"
 	}
 
