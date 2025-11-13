@@ -316,14 +316,8 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 				// Calculate confidence based on entropy and context
 				confidence := calculateConfidence(matchedSecret, entropy, context, secretPatterns[index])
 
-				// Skip documentation files entirely - they're full of examples
-				isDocFile := strings.HasSuffix(strings.ToLower(path), ".md") ||
-					strings.HasSuffix(strings.ToLower(path), ".rst") ||
-					strings.Contains(strings.ToLower(path), "/docs/") ||
-					strings.Contains(strings.ToLower(path), "\\docs\\")
-
-				// Use LLM verification if available (skip doc files and low confidence)
-				if pipeline != nil && confidence != "low" && !isDocFile {
+				// Use LLM verification if available
+				if pipeline != nil && confidence != "low" {
 					result, err := pipeline.VerifyFinding(
 						path,
 						lineNumber,
@@ -365,8 +359,8 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 							})
 						}
 					}
-				} else if confidence != "low" && !isDocFile {
-					// No LLM pipeline or low confidence - use standard detection (skip doc files)
+				} else if confidence != "low" {
+					// No LLM pipeline or low confidence - use standard detection
 					secrets = append(secrets, Secret{
 						File:       fmt.Sprintf("%s (%s)", path, secretType),
 						LineNumber: lineNumber,

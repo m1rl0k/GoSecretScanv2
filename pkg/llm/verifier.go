@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -63,20 +64,21 @@ func NewLLMVerifier(modelPath string, endpoint string, enabled bool) (*LLMVerifi
 		return &LLMVerifier{enabled: false}, nil
 	}
 
-	if modelPath == "" {
-		return nil, fmt.Errorf("model path is required when LLM verification is enabled")
-	}
-
-	// Check if model exists locally so users get fast feedback when running the bundled server
-	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("model not found at %s: %w", modelPath, err)
-	}
-
 	if endpoint == "" {
 		endpoint = defaultLLMEndpoint
 	}
 
 	endpoint = strings.TrimSuffix(endpoint, "/")
+
+	// Only check if model exists locally when using localhost (bundled server)
+	// Skip check for remote endpoints where the model lives on the server
+	isRemote := !strings.Contains(endpoint, "localhost") && !strings.Contains(endpoint, "127.0.0.1")
+
+	if !isRemote && modelPath != "" {
+		if _, err := os.Stat(modelPath); os.IsNotExist(err) {
+			return nil, fmt.Errorf("model not found at %s: %w", modelPath, err)
+		}
+	}
 
 	return &LLMVerifier{
 		enabled:  true,
@@ -193,8 +195,10 @@ func (v *LLMVerifier) invokeLLM(prompt string) (*VerificationResult, error) {
 		defer func() { <-v.sem }()
 	}
 
+	// Don't send model field to llama.cpp - it expects model name from /v1/models or empty string
+	// The server uses the model it was started with
 	reqBody := chatRequest{
-		Model: v.model,
+		Model: "", // Empty string = use server's default model
 		Messages: []chatMessage{
 			{Role: "system", Content: "You are a senior application security engineer. Respond with JSON only."},
 			{Role: "user", Content: prompt},
@@ -226,8 +230,11 @@ func (v *LLMVerifier) invokeLLM(prompt string) (*VerificationResult, error) {
 	}
 	defer resp.Body.Close()
 
+	// Check HTTP status first
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("LLM server returned status %s", resp.Status)
+		// Read body for error details
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("LLM server returned status %s: %s", resp.Status, string(bodyBytes))
 	}
 
 	var completion chatResponse
@@ -250,10 +257,15 @@ func (v *LLMVerifier) invokeLLM(prompt string) (*VerificationResult, error) {
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 
+	// Check if content looks like JSON before parsing
+	if !strings.HasPrefix(content, "{") {
+		return nil, fmt.Errorf("LLM response is not JSON, got: %s", content[:min(100, len(content))])
+	}
+
 	// Use parseResponse to extract JSON even if there's extra text
 	result, err := v.parseResponse(content)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal LLM JSON: %w", err)
+		return nil, fmt.Errorf("failed to parse LLM JSON (content preview: %s...): %w", content[:min(100, len(content))], err)
 	}
 
 	return result, nil
@@ -389,6 +401,14 @@ func isReservedIP(s string) bool {
 		}
 	}
 	return false
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // parseResponse parses the LLM's JSON response
