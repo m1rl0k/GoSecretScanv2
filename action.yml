@@ -34,7 +34,7 @@ inputs:
   llama-image:
     description: 'Docker image to launch llama.cpp server'
     required: false
-    default: 'ghcr.io/ggerganov/llama.cpp:full'
+    default: 'ghcr.io/ggerganov/llama.cpp:server'
 
 outputs:
   secrets-found:
@@ -74,7 +74,8 @@ runs:
         PORT: ${{ inputs.llm-port }}
         LLAMA_CPP_IMAGE: ${{ inputs.llama-image }}
         SERVER_PORT: ${{ inputs.llm-port }}
-        HOST_NETWORK: "true"
+        HOST_NETWORK: "false"
+        HOST_IP: "127.0.0.1"
       run: |
         MODEL_PATH="$MODEL_PATH_INPUT"
         if [[ "$MODEL_PATH" != /* ]]; then
@@ -87,6 +88,7 @@ runs:
         export CONTAINER_NAME="gosecretscanner-llm"
         export SERVER_PORT
         export HOST_NETWORK
+        export HOST_IP
         ./scripts/run-llama-server.sh
 
     - name: Wait for llama.cpp server
