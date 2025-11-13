@@ -72,11 +72,17 @@ A next-generation, AI-powered security scanner that detects secrets, API keys, c
 # Download the model first (one-time setup)
 ./scripts/download-models.sh
 
-# Run with LLM verification
+# Start the llama.cpp HTTP server (runs on :8080 by default)
+./scripts/run-llama-server.sh
+
+# In a different terminal, run with LLM verification
 ./gosecretscanner --llm
 
 # Custom model path
 ./gosecretscanner --llm --model-path=/path/to/granite-4.0-micro.Q4_K_M.gguf
+
+# Point to a remote llama.cpp endpoint
+./gosecretscanner --llm --llm-endpoint=http://localhost:8080
 
 # Adjust similarity threshold for vector search
 ./gosecretscanner --llm --similarity=0.9
@@ -90,6 +96,9 @@ export GOSECRETSCANNER_LLM_ENABLED=true
 
 # Set model path
 export GOSECRETSCANNER_MODEL_PATH=.gosecretscanner/models/granite-4.0-micro.Q4_K_M.gguf
+
+# Override the llama.cpp endpoint (defaults to http://localhost:8080)
+export GOSECRETSCANNER_LLM_ENDPOINT=http://localhost:8080
 
 # Set vector database path
 export GOSECRETSCANNER_DB_PATH=.gosecretscanner/findings.db
