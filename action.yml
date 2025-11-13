@@ -22,7 +22,7 @@ inputs:
   model-path:
     description: 'Path to the Granite GGUF model (relative to repo by default)'
     required: false
-    default: '.gosecretscanner/models/granite-4.0-micro.Q4_K_M.gguf'
+    default: '.gosecretscanner/models/granite-4.0-micro-Q4_K_M.gguf'
   llm-endpoint:
     description: 'HTTP endpoint for llama.cpp server (defaults to localhost)'
     required: false

@@ -24,6 +24,26 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+# Resolve model path robustly (accept common naming mistakes)
+if [ ! -f "$MODEL_PATH" ]; then
+  # Try hyphen/dot variant swap around "micro"
+  alt_path=$(echo "$MODEL_PATH" | sed 's/micro\.Q/micro-Q/')
+  if [ -f "$alt_path" ]; then
+    echo "Note: Using model at $alt_path (corrected filename variant)"
+    MODEL_PATH="$alt_path"
+  else
+    # Try to auto-discover in default model dir
+    default_dir=".gosecretscanner/models"
+    if [ -d "$default_dir" ]; then
+      candidate=$(ls -1 "$default_dir"/granite-4.0-micro-*.gguf 2>/dev/null | grep -E 'Q4_K_M|Q4_1|Q4_0|Q3_K_M' | head -n1 || true)
+      if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+        echo "Note: Auto-discovered model: $candidate"
+        MODEL_PATH="$candidate"
+      fi
+    fi
+  fi
+fi
+
 if [ ! -f "$MODEL_PATH" ]; then
   echo "Model not found at $MODEL_PATH. Run scripts/download-models.sh first or set MODEL_PATH." >&2
   exit 1
