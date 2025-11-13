@@ -115,6 +115,18 @@ runs:
         while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
           if curl -fsS "$ENDPOINT/health" >/dev/null 2>&1; then
             echo "llama.cpp server is ready at $ENDPOINT"
+
+            # Warmup: Send a test request to ensure model is fully loaded
+            echo "Warming up model with test request..."
+            if curl -fsS "$ENDPOINT/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -d '{"messages":[{"role":"user","content":"test"}],"max_tokens":5}' \
+              >/dev/null 2>&1; then
+              echo "Model warmup successful"
+            else
+              echo "Warning: Model warmup failed, but continuing..."
+            fi
+
             exit 0
           fi
           ATTEMPTS=$((ATTEMPTS+1))
@@ -140,7 +152,8 @@ runs:
         if [ "${{ inputs.enable-llm }}" == "true" ]; then
           MODEL_PATH="${{ inputs.model-path }}"
           if [[ "$MODEL_PATH" != /* ]]; then
-            MODEL_PATH="${{ github.action_path }}/$MODEL_PATH"
+            # Resolve to absolute path, removing any ./ prefix
+            MODEL_PATH="${{ github.action_path }}/${MODEL_PATH#./}"
           fi
           LLM_ENDPOINT="${{ inputs.llm-endpoint }}"
           if [ -z "$LLM_ENDPOINT" ]; then

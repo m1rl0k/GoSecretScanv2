@@ -14,7 +14,7 @@ import (
 const (
 	defaultLLMEndpoint = "http://localhost:8080"
 	llamaAPIRoute      = "/v1/chat/completions"
-	llmRequestTimeout  = 45 * time.Second
+	llmRequestTimeout  = 60 * time.Second // Increased for Granite model which can be slow on first requests
 )
 
 // VerificationResult represents the LLM's verification result
@@ -234,12 +234,19 @@ func (v *LLMVerifier) invokeLLM(prompt string) (*VerificationResult, error) {
 		return nil, fmt.Errorf("LLM response content is empty")
 	}
 
-	var result VerificationResult
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
+	// Strip markdown code blocks if present (Granite often wraps JSON in ```json ... ```)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	// Use parseResponse to extract JSON even if there's extra text
+	result, err := v.parseResponse(content)
+	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal LLM JSON: %w", err)
 	}
 
-	return &result, nil
+	return result, nil
 }
 
 // heuristicVerify provides rule-based verification as fallback
