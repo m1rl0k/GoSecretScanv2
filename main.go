@@ -16,12 +16,12 @@ import (
 )
 
 const (
-	ResetColor        = "\033[0m"
-	RedColor          = "\033[31m"
-	GreenColor        = "\033[32m"
-	YellowColor       = "\033[33m"
-	SeparatorLine     = "------------------------------------------------------------------------"
-	maxFileSizeBytes  = 5 * 1024 * 1024 // 5MB cap to skip huge/binary blobs
+	ResetColor       = "\033[0m"
+	RedColor         = "\033[31m"
+	GreenColor       = "\033[32m"
+	YellowColor      = "\033[33m"
+	SeparatorLine    = "------------------------------------------------------------------------"
+	maxFileSizeBytes = 5 * 1024 * 1024 // 5MB cap to skip huge/binary blobs
 )
 
 var (

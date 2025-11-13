@@ -1,7 +1,9 @@
 package vectorstore
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -111,16 +113,12 @@ func (vs *VectorStore) Store(finding *Finding) error {
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	// Redact snippet for ephemeral stores to avoid persisting raw secrets
-	snippet := finding.CodeSnippet
-	if vs.ephemeral {
-		snippet = redactSnippet(snippet)
-	}
+	sanitizedSnippet := sanitizeSnippet(finding.CodeSnippet, vs.ephemeral)
 
 	result, err := vs.db.Exec(query,
 		finding.FilePath,
 		finding.LineNumber,
-		snippet,
+		sanitizedSnippet,
 		string(embeddingJSON),
 		finding.PatternType,
 		finding.Entropy,
@@ -133,19 +131,18 @@ func (vs *VectorStore) Store(finding *Finding) error {
 		return fmt.Errorf("failed to store finding: %w", err)
 	}
 
+	id, _ := result.LastInsertId()
+	finding.ID = id
+
+	return nil
+}
+
 func redactSnippet(s string) string {
 	if s == "" {
 		return ""
 	}
 	h := sha256.Sum256([]byte(s))
 	return "HASH:" + hex.EncodeToString(h[:])[:16]
-}
-
-
-	id, _ := result.LastInsertId()
-	finding.ID = id
-
-	return nil
 }
 
 // Search finds similar findings using cosine similarity
@@ -271,4 +268,16 @@ func cosineSimilarity(a, b []float32) float32 {
 		return 0
 	}
 	return float32(dot / denom)
+}
+
+func sanitizeSnippet(snippet string, ephemeral bool) string {
+	if snippet == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(snippet))
+	encoded := hex.EncodeToString(sum[:])
+	if ephemeral {
+		return "sha256:" + encoded[:16]
+	}
+	return "sha256:" + encoded
 }
