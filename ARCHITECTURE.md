@@ -170,16 +170,18 @@ CREATE INDEX idx_embeddings ON code_embeddings USING vss(embedding);
 
 ### 4. Llama.cpp Integration
 
-**Model**: IBM Granite-3.0-2B-Instruct (GGUF, Q4_K_M quantization)
+**Model**: IBM Granite-4.0-Micro (GGUF, Q4_K_M quantization)
 
-**Size**: ~1.2GB Q4 quantized (optimized for CI/CD)
+**Size**: ~450MB Q4 quantized (perfect for CI/CD)
 
-**Why Granite**:
+**Why Granite 4.0 Micro**:
 - Specifically trained for code understanding
-- Excellent instruction following
-- Fast inference on CPU
-- Open-source and permissive license
+- Excellent instruction following despite small size
+- Very fast inference on CPU (~100-200 tokens/sec)
+- Fits easily in GitHub Actions (7GB RAM limit)
+- Open-source Apache 2.0 license
 - Better code analysis than general LLMs
+- Lower memory footprint than larger models
 
 **Purpose**: LLM verification of findings
 

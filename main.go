@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/m1rl0k/GoSecretScanv2/pkg/verification"
 )
 
 const (
@@ -86,6 +89,14 @@ type Secret struct {
 	Context    string  // Additional context (e.g., "test file", "comment", "variable")
 }
 
+var (
+	// CLI flags
+	enableLLM      = flag.Bool("llm", false, "Enable LLM-powered verification")
+	modelPath      = flag.String("model-path", ".gosecretscanner/models/granite-4.0-micro.Q4_K_M.gguf", "Path to LLM model")
+	dbPath         = flag.String("db-path", ".gosecretscanner/findings.db", "Path to vector store database")
+	similarityThreshold = flag.Float64("similarity", 0.8, "Similarity threshold for vector search")
+)
+
 func init() {
 	additionalPatterns := AdditionalSecretPatterns()
 	secretPatterns = append(secretPatterns, additionalPatterns...)
@@ -98,6 +109,31 @@ func init() {
 }
 
 func main() {
+	// Parse CLI flags
+	flag.Parse()
+
+	// Initialize verification pipeline if LLM is enabled
+	var pipeline *verification.Pipeline
+	if *enableLLM {
+		config := &verification.Config{
+			Enabled:             true,
+			DBPath:              *dbPath,
+			ModelPath:           *modelPath,
+			SimilarityThreshold: float32(*similarityThreshold),
+		}
+
+		var err error
+		pipeline, err = verification.NewPipeline(config)
+		if err != nil {
+			fmt.Printf("%sWarning: Failed to initialize LLM pipeline: %v%s\n", YellowColor, err, ResetColor)
+			fmt.Printf("%sContinuing with standard detection only...%s\n\n", YellowColor, ResetColor)
+			pipeline = nil
+		} else {
+			fmt.Printf("%sLLM verification enabled%s\n\n", GreenColor, ResetColor)
+			defer pipeline.Close()
+		}
+	}
+
 	dir, err := os.Getwd()
 	if err != nil {
 		fmt.Println("Error getting current working directory:", err)
@@ -116,7 +152,7 @@ func main() {
 			wg.Add(1)
 			go func(p string) {
 				defer wg.Done()
-				secrets, err := scanFileForSecrets(p)
+				secrets, err := scanFileForSecrets(p, pipeline)
 				if err != nil {
 					fmt.Printf("Error scanning file %s: %v\n", p, err)
 					return
@@ -204,7 +240,7 @@ func displaySecret(secret Secret) {
 	fmt.Printf("%sLine:%s %s\n", YellowColor, ResetColor, secret.Line)
 }
 
-func scanFileForSecrets(path string) ([]Secret, error) {
+func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -252,8 +288,51 @@ func scanFileForSecrets(path string) ([]Secret, error) {
 				// Calculate confidence based on entropy and context
 				confidence := calculateConfidence(matchedSecret, entropy, context, secretPatterns[index])
 
-				// Only report findings with medium confidence or higher (filter out low confidence)
-				if confidence != "low" {
+				// Use LLM verification if available
+				if pipeline != nil && confidence != "low" {
+					result, err := pipeline.VerifyFinding(
+						path,
+						lineNumber,
+						line,
+						secretPatterns[index],
+						matchedSecret,
+						entropy,
+						context,
+						confidence,
+					)
+
+					if err == nil {
+						// Update confidence based on LLM verification
+						confidence = result.Confidence
+
+						// Only report if LLM confirms it's a real secret
+						if result.IsRealSecret {
+							secrets = append(secrets, Secret{
+								File:       fmt.Sprintf("%s (%s) [LLM: %s]", path, secretType, result.Reasoning),
+								LineNumber: lineNumber,
+								Line:       line,
+								Type:       secretPatterns[index],
+								Confidence: confidence,
+								Entropy:    entropy,
+								Context:    context,
+							})
+						}
+					} else {
+						// Fall back to non-LLM if verification fails
+						if confidence != "low" {
+							secrets = append(secrets, Secret{
+								File:       fmt.Sprintf("%s (%s)", path, secretType),
+								LineNumber: lineNumber,
+								Line:       line,
+								Type:       secretPatterns[index],
+								Confidence: confidence,
+								Entropy:    entropy,
+								Context:    context,
+							})
+						}
+					}
+				} else if confidence != "low" {
+					// No LLM pipeline or low confidence - use standard detection
 					secrets = append(secrets, Secret{
 						File:       fmt.Sprintf("%s (%s)", path, secretType),
 						LineNumber: lineNumber,
