@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -54,6 +53,7 @@ type LLMVerifier struct {
 	model    string
 	endpoint string
 	client   *http.Client
+	sem      chan struct{}
 }
 
 // NewLLMVerifier creates a new LLM verifier
@@ -84,6 +84,7 @@ func NewLLMVerifier(modelPath string, endpoint string, enabled bool) (*LLMVerifi
 		client: &http.Client{
 			Timeout: llmRequestTimeout,
 		},
+		sem: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -184,6 +185,12 @@ type chatResponse struct {
 }
 
 func (v *LLMVerifier) invokeLLM(prompt string) (*VerificationResult, error) {
+	// Limit concurrent LLM calls to avoid timeouts on small CI runners
+	if v.sem != nil {
+		v.sem <- struct{}{}
+		defer func() { <-v.sem }()
+	}
+
 	reqBody := chatRequest{
 		Model: v.model,
 		Messages: []chatMessage{
@@ -192,7 +199,7 @@ func (v *LLMVerifier) invokeLLM(prompt string) (*VerificationResult, error) {
 		},
 		Temperature: 0.1,
 		TopP:        0.9,
-		MaxTokens:   256,
+		MaxTokens:   128,
 		Stream:      false,
 	}
 
@@ -260,6 +267,14 @@ func (v *LLMVerifier) heuristicVerify(finding *Finding, context *CodeContext) *V
 	if context.IsTest {
 		isReal = false
 		reasoning = append(reasoning, "Found in test file")
+		confidence = "low"
+	}
+
+	// Documentation files are generally examples; lower severity/ignore
+	lowerPath := strings.ToLower(finding.FilePath)
+	if strings.HasSuffix(lowerPath, ".md") || strings.HasSuffix(lowerPath, ".rst") || strings.Contains(lowerPath, "/docs/") {
+		isReal = false
+		reasoning = append(reasoning, "Found in documentation")
 		confidence = "low"
 	}
 
