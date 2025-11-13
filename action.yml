@@ -96,15 +96,22 @@ runs:
         if [ -z "$ENDPOINT" ]; then
           ENDPOINT="http://127.0.0.1:$LLM_PORT"
         fi
-        for i in $(seq 1 30); do
-          if curl -fsS "$ENDPOINT/health" >/dev/null 2>&1 || curl -fsS "$ENDPOINT/v1/models" >/dev/null 2>&1; then
+        ATTEMPTS=0
+        MAX_ATTEMPTS=40
+        SLEEP_SECS=5
+        while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+          if curl -fsS "$ENDPOINT/v1/models" >/dev/null 2>&1 || \
+             curl -fsS "$ENDPOINT/v1/chat/completions" -o /dev/null 2>&1 || \
+             curl -fsS "$ENDPOINT/healthz" >/dev/null 2>&1; then
             echo "llama.cpp server is ready"
             exit 0
           fi
-          echo "Waiting for llama.cpp server on $ENDPOINT ..."
-          sleep 2
+          ATTEMPTS=$((ATTEMPTS+1))
+          echo "Waiting for llama.cpp server on $ENDPOINT (attempt $ATTEMPTS/$MAX_ATTEMPTS)..."
+          sleep $SLEEP_SECS
         done
-        echo "llama.cpp server did not become ready in time" >&2
+        echo "llama.cpp server did not become ready in time. Recent container logs:" >&2
+        docker logs --tail 200 gosecretscanner-llm >&2 || true
         exit 1
 
     - name: Run Secret Scanner
