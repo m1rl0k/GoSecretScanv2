@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -79,6 +81,9 @@ type Secret struct {
 	LineNumber int
 	Line       string
 	Type       string
+	Confidence string  // low, medium, high, critical
+	Entropy    float64 // Shannon entropy of the matched secret
+	Context    string  // Additional context (e.g., "test file", "comment", "variable")
 }
 
 func init() {
@@ -133,16 +138,72 @@ func main() {
 	if len(secretsFound) > 0 {
 		fmt.Printf("\n%s%s%s\n", YellowColor, SeparatorLine, ResetColor)
 		fmt.Printf("%sSecrets found:%s\n", RedColor, ResetColor)
+
+		// Group by confidence level
+		critical := []Secret{}
+		high := []Secret{}
+		medium := []Secret{}
+
 		for _, secret := range secretsFound {
-			fmt.Printf("%sFile:%s %s\n%sLine Number:%s %d\n%sType:%s %s\n%sLine:%s %s\n\n", YellowColor, ResetColor, secret.File, YellowColor, ResetColor, secret.LineNumber, YellowColor, ResetColor, secret.Type, YellowColor, ResetColor, secret.Line)
+			switch secret.Confidence {
+			case "critical":
+				critical = append(critical, secret)
+			case "high":
+				high = append(high, secret)
+			case "medium":
+				medium = append(medium, secret)
+			}
 		}
-		fmt.Printf("%s%s\n", YellowColor, SeparatorLine)
-		fmt.Printf("%s%d secrets found. Please review and remove them before committing your code.%s\n", RedColor, len(secretsFound), ResetColor)
+
+		// Display critical findings first
+		if len(critical) > 0 {
+			fmt.Printf("\n%s=== CRITICAL FINDINGS ===%s\n", RedColor, ResetColor)
+			for _, secret := range critical {
+				displaySecret(secret)
+			}
+		}
+
+		// Then high confidence
+		if len(high) > 0 {
+			fmt.Printf("\n%s=== HIGH CONFIDENCE ===%s\n", RedColor, ResetColor)
+			for _, secret := range high {
+				displaySecret(secret)
+			}
+		}
+
+		// Then medium confidence
+		if len(medium) > 0 {
+			fmt.Printf("\n%s=== MEDIUM CONFIDENCE ===%s\n", YellowColor, ResetColor)
+			for _, secret := range medium {
+				displaySecret(secret)
+			}
+		}
+
+		fmt.Printf("\n%s%s\n", YellowColor, SeparatorLine)
+		fmt.Printf("%sSummary: %d secrets found (Critical: %d, High: %d, Medium: %d)%s\n",
+			RedColor, len(secretsFound), len(critical), len(high), len(medium), ResetColor)
+		fmt.Printf("%sPlease review and remove them before committing your code.%s\n", RedColor, ResetColor)
 		os.Exit(1)
 	} else {
 		fmt.Printf("%sNo secrets found.%s\n", GreenColor, ResetColor)
 	}
 }
+
+func displaySecret(secret Secret) {
+	confidenceColor := YellowColor
+	if secret.Confidence == "critical" || secret.Confidence == "high" {
+		confidenceColor = RedColor
+	}
+
+	fmt.Printf("\n%sFile:%s %s\n", YellowColor, ResetColor, secret.File)
+	fmt.Printf("%sLine Number:%s %d\n", YellowColor, ResetColor, secret.LineNumber)
+	fmt.Printf("%sConfidence:%s %s%s%s (Entropy: %.2f)\n",
+		YellowColor, ResetColor, confidenceColor, strings.ToUpper(secret.Confidence), ResetColor, secret.Entropy)
+	fmt.Printf("%sContext:%s %s\n", YellowColor, ResetColor, secret.Context)
+	fmt.Printf("%sPattern:%s %s\n", YellowColor, ResetColor, secret.Type)
+	fmt.Printf("%sLine:%s %s\n", YellowColor, ResetColor, secret.Line)
+}
+
 func scanFileForSecrets(path string) ([]Secret, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -173,14 +234,36 @@ func scanFileForSecrets(path string) ([]Secret, error) {
 			if len(match) > 0 {
 				secretType := "Secret"
 				if index >= len(secretPatterns)-len(AdditionalSecretPatterns()) {
-									secretType = "Additional Secret"
+					secretType = "Additional Secret"
 				}
-				secrets = append(secrets, Secret{
-					File:       fmt.Sprintf("%s (%s)", path, secretType),
-					LineNumber: lineNumber,
-					Line:       line,
-					Type:       secretPatterns[index],
-				})
+
+				// Extract the actual matched secret for analysis
+				matchedSecret := match[0]
+				if len(match) > 1 && match[1] != "" {
+					matchedSecret = match[1] // Use captured group if available
+				}
+
+				// Calculate entropy of the matched secret
+				entropy := calculateEntropy(matchedSecret)
+
+				// Detect context of the finding
+				context := detectContext(path, line)
+
+				// Calculate confidence based on entropy and context
+				confidence := calculateConfidence(matchedSecret, entropy, context, secretPatterns[index])
+
+				// Only report findings with medium confidence or higher (filter out low confidence)
+				if confidence != "low" {
+					secrets = append(secrets, Secret{
+						File:       fmt.Sprintf("%s (%s)", path, secretType),
+						LineNumber: lineNumber,
+						Line:       line,
+						Type:       secretPatterns[index],
+						Confidence: confidence,
+						Entropy:    entropy,
+						Context:    context,
+					})
+				}
 				break
 			}
 		}
@@ -253,4 +336,119 @@ func shouldIgnore(path string) bool {
 		}
 	}
 	return false
+}
+
+// calculateEntropy calculates Shannon entropy of a string
+// Higher entropy indicates more randomness (likely a real secret)
+func calculateEntropy(s string) float64 {
+	if len(s) == 0 {
+		return 0.0
+	}
+
+	// Count character frequencies
+	freq := make(map[rune]int)
+	for _, char := range s {
+		freq[char]++
+	}
+
+	// Calculate Shannon entropy
+	var entropy float64
+	length := float64(len(s))
+
+	for _, count := range freq {
+		p := float64(count) / length
+		if p > 0 {
+			entropy -= p * math.Log2(p)
+		}
+	}
+
+	return entropy
+}
+
+// detectContext analyzes the line and file to determine context
+func detectContext(path, line string) string {
+	pathLower := strings.ToLower(path)
+	lineLower := strings.ToLower(line)
+
+	// Test file detection
+	testPatterns := []string{"test", "spec", "mock", "fixture", "example", "sample", "demo"}
+	for _, pattern := range testPatterns {
+		if strings.Contains(pathLower, pattern) {
+			return "test_file"
+		}
+	}
+
+	// Comment detection
+	commentPatterns := []string{"//", "/*", "*", "#", "<!--"}
+	for _, pattern := range commentPatterns {
+		if strings.Contains(strings.TrimSpace(line), pattern) {
+			return "comment"
+		}
+	}
+
+	// Documentation detection
+	if strings.Contains(lineLower, "example") || strings.Contains(lineLower, "documentation") {
+		return "documentation"
+	}
+
+	// Environment variable placeholder detection
+	if strings.Contains(lineLower, "${") || strings.Contains(lineLower, "%") {
+		return "placeholder"
+	}
+
+	// Configuration template detection
+	if strings.Contains(line, "YOUR_") || strings.Contains(line, "REPLACE_") ||
+	   strings.Contains(line, "INSERT_") || strings.Contains(line, "CHANGE_ME") {
+		return "template"
+	}
+
+	return "code"
+}
+
+// calculateConfidence determines confidence level based on multiple factors
+func calculateConfidence(match string, entropy float64, context string, patternType string) string {
+	// Start with base score
+	score := 50
+
+	// Entropy scoring (high entropy = likely real secret)
+	if entropy > 4.5 {
+		score += 30
+	} else if entropy > 4.0 {
+		score += 20
+	} else if entropy > 3.5 {
+		score += 10
+	} else {
+		score -= 10 // Low entropy = likely false positive
+	}
+
+	// Context scoring
+	switch context {
+	case "test_file":
+		score -= 40
+	case "comment":
+		score -= 30
+	case "documentation":
+		score -= 35
+	case "placeholder":
+		score -= 50
+	case "template":
+		score -= 45
+	case "code":
+		score += 10 // Actual code is more likely to have real secrets
+	}
+
+	// Pattern-specific adjustments
+	if strings.Contains(patternType, "AWS_Key") || strings.Contains(patternType, "Private_Key") {
+		score += 15 // Cloud keys and private keys are critical
+	}
+
+	// Convert score to confidence level
+	if score >= 80 {
+		return "critical"
+	} else if score >= 60 {
+		return "high"
+	} else if score >= 40 {
+		return "medium"
+	}
+	return "low"
 }
