@@ -13,18 +13,24 @@ import (
 
 // EmbeddingGenerator generates embeddings for text using BGE model
 type EmbeddingGenerator struct {
-	enabled   bool
-	dimension int
-	session   *ort.AdvancedSession
-	tokenizer *tokenizer.Tokenizer
-	modelPath string
+	enabled       bool
+	dimension     int
+	maxSeqLength  int
+	session       *ort.AdvancedSession
+	tokenizer     *tokenizer.Tokenizer
+	modelPath     string
+	inputIDs      *ort.Tensor[int64]
+	attentionMask *ort.Tensor[int64]
+	tokenTypeIDs  *ort.Tensor[int64]
+	outputTensor  *ort.Tensor[float32]
 }
 
 // NewEmbeddingGenerator creates a new embedding generator
 func NewEmbeddingGenerator(enabled bool) *EmbeddingGenerator {
 	return &EmbeddingGenerator{
-		enabled:   enabled,
-		dimension: 384, // BGE-small dimension
+		enabled:      enabled,
+		dimension:    384, // BGE-small dimension
+		maxSeqLength: 512, // BERT max sequence length
 	}
 }
 
@@ -32,6 +38,30 @@ func NewEmbeddingGenerator(enabled bool) *EmbeddingGenerator {
 func (e *EmbeddingGenerator) Initialize(modelsDir string) error {
 	if !e.enabled {
 		return nil
+	}
+
+	// Set ONNX Runtime library path
+	// Try both the versioned and symlinked names
+	libPaths := []string{
+		filepath.Join(modelsDir, "libonnxruntime.dylib"),      // macOS symlink
+		filepath.Join(modelsDir, "libonnxruntime.1.22.0.dylib"), // macOS versioned
+		filepath.Join(modelsDir, "libonnxruntime.1.20.1.dylib"), // macOS old version
+		filepath.Join(modelsDir, "libonnxruntime.so"),         // Linux symlink
+		filepath.Join(modelsDir, "libonnxruntime.so.1.22.0"),  // Linux versioned
+		filepath.Join(modelsDir, "libonnxruntime.so.1.20.1"),  // Linux old version
+	}
+
+	libFound := false
+	for _, libPath := range libPaths {
+		if _, err := os.Stat(libPath); err == nil {
+			ort.SetSharedLibraryPath(libPath)
+			libFound = true
+			break
+		}
+	}
+
+	if !libFound {
+		return fmt.Errorf("ONNX Runtime library not found in %s. Run scripts/download-models.sh", modelsDir)
 	}
 
 	// Initialize ONNX runtime
@@ -47,17 +77,7 @@ func (e *EmbeddingGenerator) Initialize(modelsDir string) error {
 
 	e.modelPath = modelPath
 
-	// Create ONNX session
-	session, err := ort.NewAdvancedSession(modelPath,
-		[]string{"input_ids", "attention_mask", "token_type_ids"},
-		[]string{"last_hidden_state"},
-		nil)
-	if err != nil {
-		return fmt.Errorf("failed to create ONNX session: %w", err)
-	}
-	e.session = session
-
-	// Load tokenizer
+	// Load tokenizer first (needed for session creation)
 	tokenizerPath := filepath.Join(modelsDir, "bge-tokenizer.json")
 	if _, err := os.Stat(tokenizerPath); os.IsNotExist(err) {
 		return fmt.Errorf("BGE tokenizer not found at %s. Run scripts/download-models.sh", tokenizerPath)
@@ -68,6 +88,44 @@ func (e *EmbeddingGenerator) Initialize(modelsDir string) error {
 		return fmt.Errorf("failed to load tokenizer: %w", err)
 	}
 	e.tokenizer = tk
+
+	// Pre-allocate tensors with fixed shape [1, maxSeqLength]
+	shape := ort.NewShape(1, int64(e.maxSeqLength))
+
+	// Create input tensors (will be filled with data on each call)
+	e.inputIDs, err = ort.NewEmptyTensor[int64](shape)
+	if err != nil {
+		return fmt.Errorf("failed to create input IDs tensor: %w", err)
+	}
+
+	e.attentionMask, err = ort.NewEmptyTensor[int64](shape)
+	if err != nil {
+		return fmt.Errorf("failed to create attention mask tensor: %w", err)
+	}
+
+	e.tokenTypeIDs, err = ort.NewEmptyTensor[int64](shape)
+	if err != nil {
+		return fmt.Errorf("failed to create token type IDs tensor: %w", err)
+	}
+
+	// Create output tensor [1, maxSeqLength, dimension]
+	outputShape := ort.NewShape(1, int64(e.maxSeqLength), int64(e.dimension))
+	e.outputTensor, err = ort.NewEmptyTensor[float32](outputShape)
+	if err != nil {
+		return fmt.Errorf("failed to create output tensor: %w", err)
+	}
+
+	// Create ONNX session with pre-allocated tensors
+	session, err := ort.NewAdvancedSession(modelPath,
+		[]string{"input_ids", "attention_mask", "token_type_ids"},
+		[]string{"last_hidden_state"},
+		[]ort.Value{e.inputIDs, e.attentionMask, e.tokenTypeIDs},
+		[]ort.Value{e.outputTensor},
+		nil)
+	if err != nil {
+		return fmt.Errorf("failed to create ONNX session: %w", err)
+	}
+	e.session = session
 
 	return nil
 }
@@ -89,60 +147,44 @@ func (e *EmbeddingGenerator) Generate(text string) ([]float32, error) {
 	attentionMask := encoding.GetAttentionMask()
 	tokenTypeIds := encoding.GetTypeIds()
 
-	// Prepare input tensors
-	inputIDs := make([]int64, len(ids))
-	for i, id := range ids {
-		inputIDs[i] = int64(id)
+	// Get tensor data slices
+	inputData := e.inputIDs.GetData()
+	attentionData := e.attentionMask.GetData()
+	tokenTypeData := e.tokenTypeIDs.GetData()
+
+	// Clear tensors (fill with zeros)
+	for i := range inputData {
+		inputData[i] = 0
+		attentionData[i] = 0
+		tokenTypeData[i] = 0
 	}
 
-	attention := make([]int64, len(attentionMask))
-	for i, mask := range attentionMask {
-		attention[i] = int64(mask)
+	// Fill tensors with tokenized data (pad or truncate to maxSeqLength)
+	seqLen := len(ids)
+	if seqLen > e.maxSeqLength {
+		seqLen = e.maxSeqLength
 	}
 
-	tokenTypes := make([]int64, len(tokenTypeIds))
-	for i, typeID := range tokenTypeIds {
-		tokenTypes[i] = int64(typeID)
+	for i := 0; i < seqLen; i++ {
+		inputData[i] = int64(ids[i])
+		attentionData[i] = int64(attentionMask[i])
+		tokenTypeData[i] = int64(tokenTypeIds[i])
 	}
-
-	// Create input shape [1, sequence_length]
-	shape := ort.NewShape(1, int64(len(inputIDs)))
-
-	inputIDsTensor, err := ort.NewTensor(shape, inputIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create input IDs tensor: %w", err)
-	}
-	defer inputIDsTensor.Destroy()
-
-	attentionTensor, err := ort.NewTensor(shape, attention)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create attention mask tensor: %w", err)
-	}
-	defer attentionTensor.Destroy()
-
-	tokenTypesTensor, err := ort.NewTensor(shape, tokenTypes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create token types tensor: %w", err)
-	}
-	defer tokenTypesTensor.Destroy()
 
 	// Run inference
-	outputs, err := e.session.Run([]ort.ArbitraryTensor{
-		inputIDsTensor,
-		attentionTensor,
-		tokenTypesTensor,
-	})
+	err = e.session.Run()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run ONNX inference: %w", err)
 	}
-	defer outputs[0].Destroy()
 
 	// Extract embeddings (CLS token pooling - first token)
-	outputData := outputs[0].GetData().([]float32)
+	// Output shape is [1, maxSeqLength, dimension]
+	// CLS token is at position 0
+	outputData := e.outputTensor.GetData()
 
-	// The output shape is [batch_size, sequence_length, hidden_dim]
-	// We take the CLS token (first token) embedding
-	embedding := outputData[:e.dimension]
+	// Extract CLS token embedding (first dimension elements)
+	embedding := make([]float32, e.dimension)
+	copy(embedding, outputData[:e.dimension])
 
 	// Normalize the embedding
 	return normalize(embedding), nil
@@ -217,5 +259,20 @@ func (e *EmbeddingGenerator) Close() error {
 			return err
 		}
 	}
+
+	// Destroy tensors
+	if e.inputIDs != nil {
+		e.inputIDs.Destroy()
+	}
+	if e.attentionMask != nil {
+		e.attentionMask.Destroy()
+	}
+	if e.tokenTypeIDs != nil {
+		e.tokenTypeIDs.Destroy()
+	}
+	if e.outputTensor != nil {
+		e.outputTensor.Destroy()
+	}
+
 	return nil
 }

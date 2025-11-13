@@ -111,6 +111,85 @@ else
     echo "✓ Downloaded BGE tokenizer: $BGE_TOKENIZER_FILE"
 fi
 
+# ONNX Runtime Library
+echo ""
+echo "Downloading ONNX Runtime library..."
+
+# Detect OS and architecture
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+
+case "$OS" in
+    Darwin)
+        if [ "$ARCH" = "arm64" ]; then
+            ONNX_RUNTIME_URL="https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-arm64-1.22.0.tgz"
+            ONNX_RUNTIME_FILE="onnxruntime-osx-arm64-1.22.0.tgz"
+            ONNX_LIB_NAME="libonnxruntime.1.22.0.dylib"
+        else
+            ONNX_RUNTIME_URL="https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-x86_64-1.22.0.tgz"
+            ONNX_RUNTIME_FILE="onnxruntime-osx-x86_64-1.22.0.tgz"
+            ONNX_LIB_NAME="libonnxruntime.1.22.0.dylib"
+        fi
+        ;;
+    Linux)
+        if [ "$ARCH" = "aarch64" ]; then
+            ONNX_RUNTIME_URL="https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-aarch64-1.22.0.tgz"
+            ONNX_RUNTIME_FILE="onnxruntime-linux-aarch64-1.22.0.tgz"
+            ONNX_LIB_NAME="libonnxruntime.so.1.22.0"
+        else
+            ONNX_RUNTIME_URL="https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz"
+            ONNX_RUNTIME_FILE="onnxruntime-linux-x64-1.22.0.tgz"
+            ONNX_LIB_NAME="libonnxruntime.so.1.22.0"
+        fi
+        ;;
+    *)
+        echo "Warning: Unsupported OS: $OS. Skipping ONNX Runtime download."
+        ONNX_RUNTIME_URL=""
+        ;;
+esac
+
+if [ -n "$ONNX_RUNTIME_URL" ]; then
+    ONNX_LIB_PATH="$MODELS_DIR/$ONNX_LIB_NAME"
+
+    if [ -s "$ONNX_LIB_PATH" ]; then
+        echo "✓ ONNX Runtime already present: $ONNX_LIB_PATH"
+    else
+        echo "Downloading ONNX Runtime for $OS/$ARCH..."
+        tmp_archive="${CACHE_DIR}/${ONNX_RUNTIME_FILE}"
+
+        CURL_ARGS=("-L" "--fail" "--retry" "5" "--retry-delay" "2" "--progress-bar")
+
+        if command -v curl >/dev/null 2>&1; then
+            curl "${CURL_ARGS[@]}" -o "$tmp_archive" "$ONNX_RUNTIME_URL"
+        elif command -v wget >/dev/null 2>&1; then
+            wget --tries=5 --timeout=30 --show-progress "$ONNX_RUNTIME_URL" -O "$tmp_archive"
+        else
+            echo "Error: Neither curl nor wget found."
+            exit 1
+        fi
+
+        # Extract the library
+        echo "Extracting ONNX Runtime..."
+        tar -xzf "$tmp_archive" -C "$CACHE_DIR"
+
+        # Find and copy the library
+        EXTRACTED_DIR=$(tar -tzf "$tmp_archive" | head -1 | cut -f1 -d"/")
+        cp "${CACHE_DIR}/${EXTRACTED_DIR}/lib/${ONNX_LIB_NAME}" "$ONNX_LIB_PATH"
+
+        # Create symlink for easier loading
+        case "$OS" in
+            Darwin)
+                ln -sf "$ONNX_LIB_NAME" "$MODELS_DIR/libonnxruntime.dylib"
+                ;;
+            Linux)
+                ln -sf "$ONNX_LIB_NAME" "$MODELS_DIR/libonnxruntime.so"
+                ;;
+        esac
+
+        echo "✓ Downloaded ONNX Runtime: $ONNX_LIB_PATH"
+    fi
+fi
+
 echo ""
 echo "=== Download Complete ==="
 echo "Models directory: $MODELS_DIR"
