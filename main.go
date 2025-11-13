@@ -151,11 +151,21 @@ func scanFileForSecrets(path string) ([]Secret, error) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	// Increase buffer size to handle large lines (e.g., minified files)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024) // 1MB max token size
+
 	lineNumber := 1
 	var secrets []Secret
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// Skip lines that are clearly regex pattern definitions
+		if isRegexPatternLine(line) {
+			lineNumber++
+			continue
+		}
 
 		for index, re := range compiledPatterns {
 			match := re.FindStringSubmatch(line)
@@ -216,6 +226,19 @@ func AdditionalSecretPatterns() []string {
         `(?i)decryPrivateKey\s*=\s*"([^"]*)"`,
 	}
 	return vulnerabilityPatterns
+}
+
+func isRegexPatternLine(line string) bool {
+	// Skip lines that contain regex pattern definitions (backtick-quoted strings with regex)
+	// Common in source code defining patterns
+	trimmed := regexp.MustCompile(`^\s+`).ReplaceAllString(line, "")
+
+	// Check if line is a regex pattern definition (starts with backtick or contains backtick with regex chars)
+	if regexp.MustCompile("^`.*(?:\\(\\?i\\)|\\\\s|\\\\d|\\[|\\]|\\{|\\}|\\||\\^|\\$).*`").MatchString(trimmed) {
+		return true
+	}
+
+	return false
 }
 
 func shouldIgnore(path string) bool {

@@ -38,6 +38,19 @@ go build -o gosecretscanner main.go
 go install github.com/m1rl0k/GoSecretScanv2@latest
 ```
 
+### Using Docker
+
+```bash
+# Build the Docker image
+docker build -t gosecretscanner .
+
+# Run the scanner on current directory
+docker run --rm -v $(pwd):/workspace gosecretscanner
+
+# Run on specific directory
+docker run --rm -v /path/to/scan:/workspace gosecretscanner
+```
+
 ## Usage
 
 Navigate to the directory you want to scan and run:
@@ -128,26 +141,51 @@ fi
 
 ### GitHub Actions
 
+This tool is available as a reusable GitHub Action! You can use it in your workflows:
+
 ```yaml
-name: Secret Scan
+name: Security Scan
 on: [push, pull_request]
 
 jobs:
-  scan:
+  secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.24'
-
-      - name: Install GoSecretScanv2
-        run: go install github.com/m1rl0k/GoSecretScanv2@latest
-
+      # Use GoSecretScan as a reusable action
       - name: Run Secret Scanner
-        run: gosecretscanner
+        uses: m1rl0k/GoSecretScanv2@main
+        with:
+          scan-path: '.'
+          fail-on-secrets: 'true'
+```
+
+#### Action Inputs
+
+- `scan-path`: Directory path to scan (default: `.`)
+- `fail-on-secrets`: Fail the workflow if secrets are found (default: `true`)
+
+#### Action Outputs
+
+- `secrets-found`: Number of secrets detected
+- `scan-status`: Status of the scan (`success`, `failed`, or `error`)
+
+#### Advanced Usage
+
+```yaml
+- name: Run Secret Scanner with outputs
+  id: scan
+  uses: m1rl0k/GoSecretScanv2@main
+  with:
+    scan-path: './src'
+    fail-on-secrets: 'false'
+
+- name: Report results
+  if: always()
+  run: |
+    echo "Secrets found: ${{ steps.scan.outputs.secrets-found }}"
+    echo "Status: ${{ steps.scan.outputs.scan-status }}"
 ```
 
 ## Development
