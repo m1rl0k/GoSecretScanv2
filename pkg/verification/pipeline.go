@@ -2,7 +2,7 @@ package verification
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"time"
 
 	"github.com/m1rl0k/GoSecretScanv2/pkg/embeddings"
@@ -27,6 +27,7 @@ type Config struct {
 	DBPath              string
 	ModelPath           string
 	SimilarityThreshold float32
+	EphemeralStore      bool
 }
 
 // NewPipeline creates a new verification pipeline
@@ -40,7 +41,7 @@ func NewPipeline(config *Config) (*Pipeline, error) {
 
 	embeddingGen := embeddings.NewEmbeddingGenerator(config.Enabled)
 
-	vectorStore, err := vectorstore.NewVectorStore(config.DBPath, config.Enabled)
+	vectorStore, err := vectorstore.NewVectorStore(config.DBPath, config.Enabled, config.EphemeralStore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
@@ -82,7 +83,7 @@ func (p *Pipeline) VerifyFinding(
 	}
 
 	// Read file content
-	content, err := ioutil.ReadFile(filePath)
+	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}

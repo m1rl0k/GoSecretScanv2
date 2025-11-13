@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	ResetColor    = "\033[0m"
-	RedColor      = "\033[31m"
-	GreenColor    = "\033[32m"
-	YellowColor   = "\033[33m"
-	SeparatorLine = "------------------------------------------------------------------------"
+	ResetColor        = "\033[0m"
+	RedColor          = "\033[31m"
+	GreenColor        = "\033[32m"
+	YellowColor       = "\033[33m"
+	SeparatorLine     = "------------------------------------------------------------------------"
+	maxFileSizeBytes  = 5 * 1024 * 1024 // 5MB cap to skip huge/binary blobs
 )
 
 var (
@@ -81,6 +82,7 @@ var (
 
 	bracePlaceholderPattern   = regexp.MustCompile(`\$\{[^}]+\}`)
 	percentPlaceholderPattern = regexp.MustCompile(`%[A-Za-z0-9_]+%`)
+	dollarPlaceholderPattern  = regexp.MustCompile(`\$[A-Z0-9_]+`)
 )
 
 type Secret struct {
@@ -164,20 +166,28 @@ func main() {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && !shouldIgnore(path) {
-			wg.Add(1)
-			go func(p string) {
-				defer wg.Done()
-				secrets, err := scanFileForSecrets(p, pipeline)
-				if err != nil {
-					fmt.Printf("Error scanning file %s: %v\n", p, err)
-					return
-				}
-				mu.Lock()
-				secretsFound = append(secretsFound, secrets...)
-				mu.Unlock()
-			}(path)
+		if info.IsDir() {
+			if shouldIgnoreDir(path) {
+				return filepath.SkipDir
+			}
+			return nil
 		}
+		if shouldIgnoreFile(info) {
+			return nil
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(p string) {
+			defer func() { <-sem; wg.Done() }()
+			secrets, err := scanFileForSecrets(p, pipeline)
+			if err != nil {
+				fmt.Printf("Error scanning file %s: %v\n", p, err)
+				return
+			}
+			mu.Lock()
+			secretsFound = append(secretsFound, secrets...)
+			mu.Unlock()
+		}(path)
 		return nil
 	})
 	if err != nil {
@@ -419,17 +429,38 @@ func isRegexPatternLine(line string) bool {
 	return false
 }
 
-func shouldIgnore(path string) bool {
-	ignorePatterns := []string{
-		`^\.git($|/)`, // ignore .git directory and its contents
-		`node_modules`,
-		// Add more ignore patterns if needed
+func shouldIgnoreDir(path string) bool {
+	base := filepath.Base(path)
+	switch base {
+	case ".git", "node_modules", "vendor", ".gosecretscanner", "dist", "build", ".venv", "venv", "__pycache__", "coverage", ".idea", ".vscode":
+		return true
 	}
-	for _, pattern := range ignorePatterns {
-		if matched, _ := regexp.MatchString(pattern, path); matched {
-			return true
-		}
+	return false
+}
+
+func shouldIgnoreFile(info os.FileInfo) bool {
+	if info.Size() > maxFileSizeBytes {
+		return true
 	}
+
+	name := strings.ToLower(info.Name())
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".ico",
+		".mp3", ".mp4", ".mov", ".avi", ".mkv", ".wav",
+		".zip", ".gz", ".tgz", ".tar", ".rar", ".7z",
+		".pdf", ".doc", ".docx", ".ppt", ".pptx",
+		".dll", ".exe", ".so", ".dylib", ".bin", ".dat", ".class", ".jar",
+		".ttf", ".otf", ".woff", ".woff2",
+		".psd", ".xcf", ".sketch", ".ai":
+		return true
+	}
+
+	// Skip obvious minified bundles
+	if strings.HasSuffix(name, ".min.js") || strings.HasSuffix(name, ".min.css") {
+		return true
+	}
+
 	return false
 }
 
@@ -464,6 +495,7 @@ func calculateEntropy(s string) float64 {
 func detectContext(path, line string) string {
 	pathLower := strings.ToLower(path)
 	lineLower := strings.ToLower(line)
+	lineUpper := strings.ToUpper(line)
 
 	// Test file detection
 	testPatterns := []string{"test", "spec", "mock", "fixture", "example", "sample", "demo"}
@@ -489,8 +521,10 @@ func detectContext(path, line string) string {
 		return "documentation"
 	}
 
-	// Environment variable placeholder detection (restrict to ${VAR} or %VAR%)
-	if bracePlaceholderPattern.MatchString(line) || percentPlaceholderPattern.MatchString(line) {
+	// Environment variable placeholder detection (restrict to ${VAR}, %VAR%, or $VAR)
+	if bracePlaceholderPattern.MatchString(line) ||
+		percentPlaceholderPattern.MatchString(lineUpper) ||
+		dollarPlaceholderPattern.MatchString(lineUpper) {
 		return "placeholder"
 	}
 

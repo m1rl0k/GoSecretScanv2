@@ -111,10 +111,16 @@ func (vs *VectorStore) Store(finding *Finding) error {
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
+	// Redact snippet for ephemeral stores to avoid persisting raw secrets
+	snippet := finding.CodeSnippet
+	if vs.ephemeral {
+		snippet = redactSnippet(snippet)
+	}
+
 	result, err := vs.db.Exec(query,
 		finding.FilePath,
 		finding.LineNumber,
-		finding.CodeSnippet,
+		snippet,
 		string(embeddingJSON),
 		finding.PatternType,
 		finding.Entropy,
@@ -126,6 +132,15 @@ func (vs *VectorStore) Store(finding *Finding) error {
 	if err != nil {
 		return fmt.Errorf("failed to store finding: %w", err)
 	}
+
+func redactSnippet(s string) string {
+	if s == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(s))
+	return "HASH:" + hex.EncodeToString(h[:])[:16]
+}
+
 
 	id, _ := result.LastInsertId()
 	finding.ID = id
