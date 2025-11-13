@@ -78,6 +78,10 @@ var (
 	}
 	// Pre-compiled regex patterns for performance
 	compiledPatterns []*regexp.Regexp
+
+// Windows-style env placeholder pattern (e.g., %VAR%)
+var placeholderEnvWinRe = regexp.MustCompile(`%[A-Za-z0-9_]+%`)
+
 )
 
 type Secret struct {
@@ -460,12 +464,15 @@ func detectContext(path, line string) string {
 		}
 	}
 
-	// Comment detection
-	commentPatterns := []string{"//", "/*", "*", "#", "<!--"}
-	for _, pattern := range commentPatterns {
-		if strings.Contains(strings.TrimSpace(line), pattern) {
-			return "comment"
-		}
+	// Comment detection (avoid misclassifying '*' in code as a comment)
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "//") ||
+		strings.HasPrefix(trimmed, "#") ||
+		strings.Contains(line, "/*") ||
+		strings.Contains(line, "*/") ||
+		strings.Contains(line, "<!--") ||
+		strings.Contains(line, "-->") {
+		return "comment"
 	}
 
 	// Documentation detection
