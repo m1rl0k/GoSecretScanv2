@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -14,7 +15,7 @@ import (
 const (
 	defaultLLMEndpoint = "http://localhost:8080"
 	llamaAPIRoute      = "/v1/chat/completions"
-	llmRequestTimeout  = 60 * time.Second // Increased for Granite model which can be slow on first requests
+	llmRequestTimeout  = 180 * time.Second // Increased for Granite model which can be slow, especially for large repos
 )
 
 // VerificationResult represents the LLM's verification result
