@@ -96,6 +96,23 @@ runs:
         export WAIT_READY="false"
         ./scripts/run-llama-server.sh
 
+    - name: Debug container networking
+      if: inputs.enable-llm == 'true'
+      shell: bash
+      run: |
+        echo "=== Container Info ==="
+        docker ps -a | grep gosecretscanner-llm || true
+        echo ""
+        echo "=== Container IP Address ==="
+        CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' gosecretscanner-llm)
+        echo "Container IP: $CONTAINER_IP"
+        echo ""
+        echo "=== Container Ports ==="
+        docker port gosecretscanner-llm || true
+        echo ""
+        echo "=== Container Logs (last 50 lines) ==="
+        docker logs --tail 50 gosecretscanner-llm || true
+
     - name: Wait for llama.cpp server
       if: inputs.enable-llm == 'true'
       shell: bash
@@ -103,22 +120,37 @@ runs:
         LLM_ENDPOINT_INPUT: ${{ inputs.llm-endpoint }}
         LLM_PORT: ${{ inputs.llm-port }}
       run: |
+        # Get the actual container IP
+        CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' gosecretscanner-llm)
+
         ENDPOINT="$LLM_ENDPOINT_INPUT"
         if [ -z "$ENDPOINT" ]; then
+          # Try both localhost and container IP
           ENDPOINT="http://127.0.0.1:$LLM_PORT"
+          ENDPOINT_ALT="http://${CONTAINER_IP}:$LLM_PORT"
+          echo "Will try both $ENDPOINT and $ENDPOINT_ALT"
         fi
+
         ATTEMPTS=0
         MAX_ATTEMPTS=120
         SLEEP_SECS=5
         while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+          # Try localhost first
           if curl -fsS "$ENDPOINT/v1/models" >/dev/null 2>&1 || \
-             curl -fsS "$ENDPOINT/v1/chat/completions" -o /dev/null 2>&1 || \
              curl -fsS "$ENDPOINT/healthz" >/dev/null 2>&1; then
-            echo "llama.cpp server is ready"
+            echo "llama.cpp server is ready at $ENDPOINT"
             exit 0
           fi
+          # Try container IP if localhost failed
+          if [ -n "$ENDPOINT_ALT" ]; then
+            if curl -fsS "$ENDPOINT_ALT/v1/models" >/dev/null 2>&1 || \
+               curl -fsS "$ENDPOINT_ALT/healthz" >/dev/null 2>&1; then
+              echo "llama.cpp server is ready at $ENDPOINT_ALT"
+              exit 0
+            fi
+          fi
           ATTEMPTS=$((ATTEMPTS+1))
-          echo "Waiting for llama.cpp server on $ENDPOINT (attempt $ATTEMPTS/$MAX_ATTEMPTS)..."
+          echo "Waiting for llama.cpp server (attempt $ATTEMPTS/$MAX_ATTEMPTS)..."
           sleep $SLEEP_SECS
         done
         echo "llama.cpp server did not become ready in time. Recent container logs:" >&2

@@ -98,7 +98,7 @@ type Secret struct {
 var (
 	// CLI flags
 	enableLLM           = flag.Bool("llm", false, "Enable LLM-powered verification")
-	modelPath           = flag.String("model-path", ".gosecretscanner/models/granite-4.0-micro.Q4_K_M.gguf", "Path to LLM model")
+	modelPath           = flag.String("model-path", ".gosecretscanner/models/granite-4.0-micro-Q4_K_M.gguf", "Path to LLM model")
 	dbPath              = flag.String("db-path", ".gosecretscanner/findings.db", "Path to vector store database")
 	similarityThreshold = flag.Float64("similarity", 0.8, "Similarity threshold for vector search")
 	keepVectorStore     = flag.Bool("keep-vector-store", false, "Keep the vector store database after the run")

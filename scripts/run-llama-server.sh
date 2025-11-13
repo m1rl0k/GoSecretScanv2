@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # Config
-MODEL_PATH=${MODEL_PATH:-.gosecretscanner/models/granite-4.0-micro.Q4_K_M.gguf}
+MODEL_PATH=${MODEL_PATH:-.gosecretscanner/models/granite-4.0-micro-Q4_K_M.gguf}
 HOST_IP=${HOST_IP:-127.0.0.1}
 HOST_PORT=${PORT:-8080}
 SERVER_PORT=${SERVER_PORT:-8080}
@@ -47,8 +47,8 @@ fi
 # Remove old container with same name if present
 docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
-# Command to run inside container
-SERVER_CMD=(llama-server -m "/models/${MODEL_FILE}" -a 0.0.0.0 -p "${SERVER_PORT}" -c "${CTX_SIZE}" --no-warmup --log-disable)
+# Command to run inside container (entrypoint is already /app/llama-server)
+SERVER_CMD=(-m "/models/${MODEL_FILE}" --host 0.0.0.0 --port "${SERVER_PORT}" -c "${CTX_SIZE}")
 
 set -x
 if [ "$DETACH" = "true" ]; then
