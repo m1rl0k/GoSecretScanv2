@@ -85,7 +85,7 @@ A next-generation, AI-powered security scanner that detects secrets, API keys, c
 ./gosecretscanner --llm --llm-endpoint=http://localhost:8080
 
 # Run the llama.cpp server in the background via Docker
-DETACH=true PORT=8080 ./scripts/run-llama-server.sh
+DETACH=true PORT=8080 HOST_NETWORK=true SERVER_PORT=8080 ./scripts/run-llama-server.sh
 
 # Adjust similarity threshold for vector search
 ./gosecretscanner --llm --similarity=0.9
@@ -104,7 +104,7 @@ export GOSECRETSCANNER_MODEL_PATH=.gosecretscanner/models/granite-4.0-micro.Q4_K
 export GOSECRETSCANNER_LLM_ENDPOINT=http://localhost:8080
 
 # Launch llama.cpp in detached mode with a custom image/port
-DETACH=true LLAMA_CPP_IMAGE=ghcr.io/ggerganov/llama.cpp:full PORT=8080 ./scripts/run-llama-server.sh
+DETACH=true LLAMA_CPP_IMAGE=ghcr.io/ggerganov/llama.cpp:full HOST_NETWORK=true PORT=8080 ./scripts/run-llama-server.sh
 
 # Set vector database path
 export GOSECRETSCANNER_DB_PATH=.gosecretscanner/findings.db
