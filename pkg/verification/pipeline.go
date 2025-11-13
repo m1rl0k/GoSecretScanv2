@@ -13,11 +13,11 @@ import (
 
 // Pipeline orchestrates the verification process
 type Pipeline struct {
-	parser         *parser.CodeParser
-	embeddings     *embeddings.EmbeddingGenerator
-	vectorStore    *vectorstore.VectorStore
-	llmVerifier    *llm.LLMVerifier
-	enabled        bool
+	parser              *parser.CodeParser
+	embeddings          *embeddings.EmbeddingGenerator
+	vectorStore         *vectorstore.VectorStore
+	llmVerifier         *llm.LLMVerifier
+	enabled             bool
 	similarityThreshold float32
 }
 

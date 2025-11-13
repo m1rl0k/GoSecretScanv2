@@ -9,9 +9,9 @@ import (
 
 // VerificationResult represents the LLM's verification result
 type VerificationResult struct {
-	IsRealSecret  bool   `json:"is_real_secret"`
-	Confidence    string `json:"confidence"`
-	Reasoning     string `json:"reasoning"`
+	IsRealSecret   bool   `json:"is_real_secret"`
+	Confidence     string `json:"confidence"`
+	Reasoning      string `json:"reasoning"`
 	Recommendation string `json:"recommendation"`
 }
 
@@ -91,9 +91,9 @@ Context:
 - Is Test File: %v
 
 Code snippet:
-` + "```" + `
+`+"```"+`
 %s
-` + "```" + `
+`+"```"+`
 
 Pattern detected: %s
 Matched value: %s
