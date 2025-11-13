@@ -27,6 +27,7 @@ type Config struct {
 	Enabled             bool
 	DBPath              string
 	ModelPath           string
+	EmbeddingsPath      string  // Path to embeddings models directory
 	SimilarityThreshold float32
 	EphemeralStore      bool
 	LLMEndpoint         string
@@ -44,8 +45,17 @@ func NewPipeline(config *Config) (*Pipeline, error) {
 	embeddingGen := embeddings.NewEmbeddingGenerator(config.Enabled)
 
 	// Initialize BGE embeddings with ONNX model
-	if config.Enabled && config.ModelPath != "" {
-		modelsDir := filepath.Dir(config.ModelPath)
+	// Use EmbeddingsPath if specified, otherwise try to derive from ModelPath, or default to .gosecretscanner/models
+	if config.Enabled {
+		var modelsDir string
+		if config.EmbeddingsPath != "" {
+			modelsDir = config.EmbeddingsPath
+		} else if config.ModelPath != "" {
+			modelsDir = filepath.Dir(config.ModelPath)
+		} else {
+			modelsDir = ".gosecretscanner/models"
+		}
+
 		if err := embeddingGen.Initialize(modelsDir); err != nil {
 			// Non-fatal: fall back to hash-based embeddings
 			fmt.Printf("Warning: failed to initialize BGE embeddings, using hash-based fallback: %v\n", err)
@@ -105,12 +115,15 @@ func (p *Pipeline) VerifyFinding(
 		return nil, fmt.Errorf("failed to parse file: %w", err)
 	}
 
+	// Get surrounding code context (±5 lines)
+	surroundingCode := p.parser.GetContext(content, lineNumber, 5)
+
 	// Create code context
 	codeContext := &llm.CodeContext{
 		FilePath:        filePath,
 		Language:        parsed.Language,
 		Function:        p.findFunction(parsed, lineNumber),
-		SurroundingCode: line,
+		SurroundingCode: surroundingCode,
 		Imports:         parsed.Imports,
 		IsTest:          parsed.IsTest,
 	}

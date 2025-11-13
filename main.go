@@ -99,6 +99,7 @@ var (
 	// CLI flags
 	enableLLM           = flag.Bool("llm", false, "Enable LLM-powered verification")
 	modelPath           = flag.String("model-path", ".gosecretscanner/models/granite-4.0-micro-Q4_K_M.gguf", "Path to LLM model")
+	embeddingsPath      = flag.String("embeddings-path", "", "Path to embeddings models directory (defaults to .gosecretscanner/models)")
 	dbPath              = flag.String("db-path", ".gosecretscanner/findings.db", "Path to vector store database")
 	similarityThreshold = flag.Float64("similarity", 0.8, "Similarity threshold for vector search")
 	keepVectorStore     = flag.Bool("keep-vector-store", false, "Keep the vector store database after the run")
@@ -127,6 +128,7 @@ func main() {
 			Enabled:             true,
 			DBPath:              *dbPath,
 			ModelPath:           *modelPath,
+			EmbeddingsPath:      *embeddingsPath,
 			SimilarityThreshold: float32(*similarityThreshold),
 			EphemeralStore:      !*keepVectorStore,
 			LLMEndpoint:         *llmEndpoint,
