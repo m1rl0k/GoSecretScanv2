@@ -35,6 +35,10 @@ inputs:
     description: 'Docker image to launch llama.cpp server'
     required: false
     default: 'ghcr.io/ggerganov/llama.cpp:server'
+  manage-llm-server:
+    description: 'Start/stop the llama.cpp server inside this action (set to false when using an external service).'
+    required: false
+    default: 'true'
 
 outputs:
   secrets-found:
@@ -66,7 +70,7 @@ runs:
       run: ./scripts/download-models.sh
 
     - name: Start llama.cpp server
-      if: inputs.enable-llm == 'true'
+      if: inputs.enable-llm == 'true' && inputs.manage-llm-server == 'true'
       shell: bash
       working-directory: ${{ github.action_path }}
       env:
@@ -173,7 +177,7 @@ runs:
         echo "status=$STATUS" >> $GITHUB_OUTPUT
 
     - name: Stop llama.cpp server
-      if: inputs.enable-llm == 'true' && always()
+      if: inputs.enable-llm == 'true' && inputs.manage-llm-server == 'true' && always()
       shell: bash
       run: |
         docker rm -f gosecretscanner-llm >/dev/null 2>&1 || true

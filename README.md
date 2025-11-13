@@ -157,6 +157,7 @@ The bundled `action.yml` now supports full LLM verification. Key inputs:
 - `model-path`: overrides the GGUF path (relative to the action directory by default).
 - `llm-endpoint` / `llm-port`: control how the scanner reaches the llama.cpp HTTP server.
 - `llama-image`: change the Docker image used to serve Granite (default `ghcr.io/ggerganov/llama.cpp:full`).
+- `manage-llm-server`: set to `'false'` when your workflow spins up the llama.cpp container via `services:` (as shown below).
 
 Example workflow step:
 
@@ -168,6 +169,7 @@ Example workflow step:
           fail-on-secrets: 'false'
           enable-llm: 'true'
           llm-port: '8080'
+          manage-llm-server: 'false'
 ```
 
 # Run on specific directory
