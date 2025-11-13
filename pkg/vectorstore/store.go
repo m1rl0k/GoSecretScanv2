@@ -3,9 +3,12 @@ package vectorstore
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -26,14 +29,16 @@ type Finding struct {
 
 // VectorStore handles storage and retrieval of embeddings
 type VectorStore struct {
-	db      *sql.DB
-	enabled bool
+	db        *sql.DB
+	enabled   bool
+	dbPath    string
+	ephemeral bool
 }
 
 // NewVectorStore creates a new vector store
-func NewVectorStore(dbPath string, enabled bool) (*VectorStore, error) {
+func NewVectorStore(dbPath string, enabled bool, ephemeral bool) (*VectorStore, error) {
 	if !enabled {
-		return &VectorStore{enabled: false}, nil
+		return &VectorStore{enabled: false, dbPath: dbPath, ephemeral: ephemeral}, nil
 	}
 
 	// Create directory if it doesn't exist
@@ -48,8 +53,10 @@ func NewVectorStore(dbPath string, enabled bool) (*VectorStore, error) {
 	}
 
 	store := &VectorStore{
-		db:      db,
-		enabled: true,
+		db:        db,
+		enabled:   true,
+		dbPath:    dbPath,
+		ephemeral: ephemeral,
 	}
 
 	if err := store.initialize(); err != nil {
@@ -188,13 +195,9 @@ func (vs *VectorStore) Search(embedding []float32, topK int, threshold float32) 
 	}
 
 	// Sort by similarity (descending)
-	for i := 0; i < len(candidates)-1; i++ {
-		for j := i + 1; j < len(candidates); j++ {
-			if candidates[j].similarity > candidates[i].similarity {
-				candidates[i], candidates[j] = candidates[j], candidates[i]
-			}
-		}
-	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].similarity > candidates[j].similarity
+	})
 
 	// Return top K
 	var results []*Finding
@@ -219,27 +222,38 @@ func (vs *VectorStore) MarkVerified(id int64, verified bool) error {
 // Close closes the database connection
 func (vs *VectorStore) Close() error {
 	if vs.db != nil {
-		return vs.db.Close()
+		if err := vs.db.Close(); err != nil {
+			return err
+		}
 	}
+
+	if vs.enabled && vs.ephemeral && vs.dbPath != "" {
+		if err := os.Remove(vs.dbPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+
 	return nil
 }
 
 // cosineSimilarity calculates cosine similarity between two vectors
 func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) {
+	if len(a) != len(b) || len(a) == 0 {
 		return 0
 	}
 
-	var dotProduct, normA, normB float32
+	var dot, normA, normB float64
 	for i := range a {
-		dotProduct += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
+		ai := float64(a[i])
+		bi := float64(b[i])
+		dot += ai * bi
+		normA += ai * ai
+		normB += bi * bi
 	}
 
-	if normA == 0 || normB == 0 {
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
 		return 0
 	}
-
-	return dotProduct / (float32(normA) * float32(normB))
+	return float32(dot / denom)
 }
