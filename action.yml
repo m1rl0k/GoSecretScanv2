@@ -73,6 +73,8 @@ runs:
         MODEL_PATH_INPUT: ${{ inputs.model-path }}
         PORT: ${{ inputs.llm-port }}
         LLAMA_CPP_IMAGE: ${{ inputs.llama-image }}
+        SERVER_PORT: ${{ inputs.llm-port }}
+        HOST_NETWORK: "true"
       run: |
         MODEL_PATH="$MODEL_PATH_INPUT"
         if [[ "$MODEL_PATH" != /* ]]; then
@@ -83,6 +85,8 @@ runs:
         export LLAMA_CPP_IMAGE
         export DETACH="true"
         export CONTAINER_NAME="gosecretscanner-llm"
+        export SERVER_PORT
+        export HOST_NETWORK
         ./scripts/run-llama-server.sh
 
     - name: Wait for llama.cpp server
@@ -97,7 +101,7 @@ runs:
           ENDPOINT="http://127.0.0.1:$LLM_PORT"
         fi
         ATTEMPTS=0
-        MAX_ATTEMPTS=40
+        MAX_ATTEMPTS=120
         SLEEP_SECS=5
         while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
           if curl -fsS "$ENDPOINT/v1/models" >/dev/null 2>&1 || \
