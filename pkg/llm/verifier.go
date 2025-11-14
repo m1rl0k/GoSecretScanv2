@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -18,6 +19,8 @@ const (
 	llamaAPIRoute      = "/v1/chat/completions"
 	llmRequestTimeout  = 180 * time.Second // Increased for Granite model which can be slow, especially for large repos
 )
+
+var percentPlaceholderPattern = regexp.MustCompile(`%[A-Za-z0-9_]+%`)
 
 // VerificationResult represents the LLM's verification result
 type VerificationResult struct {
@@ -295,11 +298,11 @@ func (v *LLMVerifier) heuristicVerify(finding *Finding, context *CodeContext) *V
 		confidence = "low"
 	}
 
-	// Environment variable pattern
+	// Environment variable pattern (treat only real placeholders, not any '%')
 	if strings.Contains(finding.Line, "os.Getenv") ||
 		strings.Contains(finding.Line, "process.env") ||
 		strings.Contains(finding.Line, "${") ||
-		strings.Contains(finding.Line, "%") {
+		percentPlaceholderPattern.MatchString(line) {
 		isReal = false
 		reasoning = append(reasoning, "Uses environment variable pattern")
 	}

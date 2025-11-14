@@ -530,12 +530,23 @@ func detectContext(path, line string) string {
 		return "documentation"
 	}
 
-	// Test file detection (treat real test scaffolding as tests; do not down-rank examples/demo)
-	testPatterns := []string{"test", "spec", "mock", "fixture"}
-	for _, pattern := range testPatterns {
-		if strings.Contains(pathLower, pattern) {
-			return "test_file"
-		}
+	// Test file detection: only treat real test scaffolding as tests
+	base := filepath.Base(pathLower)
+	if strings.HasSuffix(base, "_test.go") ||
+		strings.HasSuffix(base, "_test.ts") ||
+		strings.HasSuffix(base, "_test.tsx") ||
+		strings.HasSuffix(base, "_test.js") ||
+		strings.HasSuffix(base, "_test.jsx") ||
+		strings.HasSuffix(base, ".spec.ts") ||
+		strings.HasSuffix(base, ".spec.tsx") ||
+		strings.HasSuffix(base, ".spec.js") ||
+		strings.HasSuffix(base, ".spec.jsx") {
+		return "test_file"
+	}
+
+	if strings.Contains(pathLower, "/test/") || strings.Contains(pathLower, "/tests/") ||
+		strings.Contains(pathLower, "\\test\\") || strings.Contains(pathLower, "\\tests\\") {
+		return "test_file"
 	}
 
 	// Comment detection (avoid misclassifying '*' in code as a comment)

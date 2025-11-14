@@ -37,6 +37,8 @@ type VectorStore struct {
 	ephemeral bool
 }
 
+const maxSearchCandidates = 500
+
 // NewVectorStore creates a new vector store
 func NewVectorStore(dbPath string, enabled bool, ephemeral bool) (*VectorStore, error) {
 	if !enabled {
@@ -147,9 +149,12 @@ func (vs *VectorStore) Search(embedding []float32, topK int, threshold float32) 
 	SELECT id, file_path, line_number, code_snippet, embedding,
 	       pattern_type, entropy, confidence, verified, timestamp
 	FROM findings
+	WHERE verified = 1
+	ORDER BY timestamp DESC
+	LIMIT ?
 	`
 
-	rows, err := vs.db.Query(query)
+	rows, err := vs.db.Query(query, maxSearchCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query findings: %w", err)
 	}
