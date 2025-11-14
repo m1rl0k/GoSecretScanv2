@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -228,7 +229,7 @@ func (vs *VectorStore) MarkVerified(id int64, verified bool) error {
 	return err
 }
 
-// Close closes the database connection
+// Close closes the database connection and cleans up ephemeral storage.
 func (vs *VectorStore) Close() error {
 	if vs.db != nil {
 		if err := vs.db.Close(); err != nil {
@@ -237,8 +238,23 @@ func (vs *VectorStore) Close() error {
 	}
 
 	if vs.enabled && vs.ephemeral && vs.dbPath != "" {
+		// Remove the main DB file
 		if err := os.Remove(vs.dbPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
+		}
+
+		// Best-effort cleanup of SQLite sidecar files
+		if strings.HasSuffix(vs.dbPath, ".db") {
+			_ = os.Remove(vs.dbPath + "-shm")
+			_ = os.Remove(vs.dbPath + "-wal")
+		}
+
+		// If the directory is now empty, remove it to avoid leaving
+		// stale .gosecretscanner/ folders and lock files lying around.
+		dir := filepath.Dir(vs.dbPath)
+		entries, err := os.ReadDir(dir)
+		if err == nil && len(entries) == 0 {
+			_ = os.Remove(dir)
 		}
 	}
 
