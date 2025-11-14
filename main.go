@@ -358,18 +358,16 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 						// Update confidence based on LLM verification
 						confidence = result.Confidence
 
-						// Only report if LLM confirms it's a real secret
-						if result.IsRealSecret {
-							secrets = append(secrets, Secret{
-								File:       fmt.Sprintf("%s (%s) [LLM: %s]", path, secretType, result.Reasoning),
-								LineNumber: lineNumber,
-								Line:       line,
-								Type:       secretPatterns[index],
-								Confidence: confidence,
-								Entropy:    entropy,
-								Context:    context,
-							})
-						}
+						// LLM is advisory-only: attach reasoning but do not suppress regex hits.
+						secrets = append(secrets, Secret{
+							File:       fmt.Sprintf("%s (%s) [LLM: %s]", path, secretType, result.Reasoning),
+							LineNumber: lineNumber,
+							Line:       line,
+							Type:       secretPatterns[index],
+							Confidence: confidence,
+							Entropy:    entropy,
+							Context:    context,
+						})
 					} else {
 						// Fall back to non-LLM if verification fails
 						if confidence != "low" {
@@ -415,8 +413,6 @@ func AdditionalSecretPatterns() []string {
 		`(?i)(\b(?:or|and)\b\s*[\w-]*\s*=\s*[\w-]*\s*\b(?:or|and)\b\s*[^\s]+)`, // SQL injection
 		`(?i)(['"\s]exec(?:ute)?\s*[(\s]*\s*@\w+\s*)`,                          // SQL injection (EXEC, EXECUTE)
 		`(?i)(['"\s]union\s*all\s*select\s*[\w\s,]+(?:from|into|where)\s*\w+)`, // SQL injection (UNION ALL SELECT)
-		`(?i)example_pattern_1\s*=\s*"([a-zA-Z0-9\-]+\.example)"`,
-		`(?i)example_pattern_2\s*=\s*"([0-9]{12}-[a-zA-Z0-9_]{32})"`,
 		// Private SSH keys
 		`-----BEGIN\sRSA\sPRIVATE\sKEY-----[\s\S]+-----END\sRSA\sPRIVATE\sKEY-----`,
 		// S3 Bucket URLs
