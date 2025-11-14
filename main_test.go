@@ -16,6 +16,8 @@ func TestDetectContext(t *testing.T) {
 		{"placeholder dollar", "pkg/service/foo.go", "token := \"$SECRET_TOKEN\"", "placeholder"},
 		{"code with percent formatting", "pkg/service/foo.go", "fmt.Printf(\"token=%s\", token)", "code"},
 		{"pointer code not comment", "pkg/service/foo.go", "value := foo * bar", "code"},
+		{"markdown documentation", "docs/setup.md", "Example TOKEN=foo", "documentation"},
+		{"readme file", "README.md", "Set API_KEY=foo", "documentation"},
 	}
 
 	for _, tc := range cases {

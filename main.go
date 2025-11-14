@@ -523,6 +523,17 @@ func detectContext(path, line string) string {
 	pathLower := strings.ToLower(path)
 	lineUpper := strings.ToUpper(line)
 
+	// Documentation/examples should not be treated as real secrets
+	docExts := []string{".md", ".rst", ".adoc", ".txt"}
+	for _, ext := range docExts {
+		if strings.HasSuffix(pathLower, ext) {
+			return "documentation"
+		}
+	}
+	if strings.Contains(pathLower, "/docs/") || strings.Contains(pathLower, "\\docs\\") {
+		return "documentation"
+	}
+
 	// Test file detection (treat real test scaffolding as tests; do not down-rank examples/demo)
 	testPatterns := []string{"test", "spec", "mock", "fixture"}
 	for _, pattern := range testPatterns {
