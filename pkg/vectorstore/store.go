@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -44,6 +45,14 @@ const maxSearchCandidates = 500
 func NewVectorStore(dbPath string, enabled bool, ephemeral bool) (*VectorStore, error) {
 	if !enabled {
 		return &VectorStore{enabled: false, dbPath: dbPath, ephemeral: ephemeral}, nil
+	}
+
+	if ephemeral {
+		tmpDir := os.TempDir()
+		dbPath = filepath.Join(
+			tmpDir,
+			fmt.Sprintf("gosecretscanner-%d-%d.db", os.Getpid(), time.Now().UnixNano()),
+		)
 	}
 
 	// Create directory if it doesn't exist
@@ -249,12 +258,16 @@ func (vs *VectorStore) Close() error {
 			_ = os.Remove(vs.dbPath + "-wal")
 		}
 
-		// If the directory is now empty, remove it to avoid leaving
-		// stale .gosecretscanner/ folders and lock files lying around.
+		// If the directory is now empty, remove it, but only for
+		// temp directories we created for ephemeral runs.
 		dir := filepath.Dir(vs.dbPath)
-		entries, err := os.ReadDir(dir)
-		if err == nil && len(entries) == 0 {
-			_ = os.Remove(dir)
+		tmpRoot := filepath.Clean(os.TempDir())
+		dirClean := filepath.Clean(dir)
+		if strings.HasPrefix(dirClean, tmpRoot) {
+			entries, err := os.ReadDir(dir)
+			if err == nil && len(entries) == 0 {
+				_ = os.Remove(dir)
+			}
 		}
 	}
 

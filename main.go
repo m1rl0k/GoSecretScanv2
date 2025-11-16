@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"math"
@@ -93,13 +94,18 @@ var (
 )
 
 type Secret struct {
-	File       string
-	LineNumber int
-	Line       string
-	Type       string
-	Confidence string  // low, medium, high, critical
-	Entropy    float64 // Shannon entropy of the matched secret
-	Context    string  // Additional context (e.g., "test file", "comment", "variable")
+	File               string  `json:"-"`
+	FilePath           string  `json:"file"`
+	LineNumber         int     `json:"line"`
+	Line               string  `json:"line_text"`
+	Match              string  `json:"match"`
+	RuleID             string  `json:"rule_id"`
+	Type               string  `json:"pattern"`
+	Confidence         string  `json:"confidence"` // low, medium, high, critical
+	Entropy            float64 `json:"entropy"`    // Shannon entropy of the matched secret
+	Context            string  `json:"context"`    // Additional context (e.g., "test file", "comment", "variable")
+	Verified           bool    `json:"verified"`
+	VerificationReason string  `json:"verification_reason,omitempty"`
 }
 
 var (
@@ -111,6 +117,21 @@ var (
 	similarityThreshold = flag.Float64("similarity", 0.8, "Similarity threshold for vector search")
 	keepVectorStore     = flag.Bool("keep-vector-store", false, "Keep the vector store database after the run")
 	llmEndpoint         = flag.String("llm-endpoint", "http://localhost:8080", "LLM server endpoint (llama.cpp HTTP API)")
+
+	outputFormat   = flag.String("output", "text", "Output format: text, json, or sarif")
+	redactOutput   = flag.Bool("redact", true, "Redact secret values in output")
+	modeFlag       = flag.String("mode", "detect", "Mode: detect, protect, or report")
+	failOn         = flag.String("fail-on", "low", "Minimum confidence to treat as a failure: low, medium, high, critical")
+	includeGlobs   = flag.String("include-glob", "", "Comma-separated glob patterns to include (relative paths)")
+	excludeGlobs   = flag.String("exclude-glob", "", "Comma-separated glob patterns to exclude (relative paths)")
+	includeExts    = flag.String("include-ext", "", "Comma-separated list of file extensions to include (e.g. .go,.py)")
+	maxFileSizeCli = flag.Int64("max-file-size", maxFileSizeBytes, "Maximum file size to scan in bytes")
+
+	// Derived settings from flags
+	maxFileSizeLimit int64 = maxFileSizeBytes
+	includeGlobList  []string
+	excludeGlobList  []string
+	includeExtList   []string
 )
 
 func init() {
@@ -127,6 +148,39 @@ func init() {
 func main() {
 	// Parse CLI flags
 	flag.Parse()
+
+	// Apply max file size override
+	if *maxFileSizeCli > 0 {
+		maxFileSizeLimit = *maxFileSizeCli
+	}
+
+	// Parse include/exclude globs and extensions
+	if *includeGlobs != "" {
+		for _, p := range strings.Split(*includeGlobs, ",") {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				includeGlobList = append(includeGlobList, filepath.ToSlash(trimmed))
+			}
+		}
+	}
+	if *excludeGlobs != "" {
+		for _, p := range strings.Split(*excludeGlobs, ",") {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				excludeGlobList = append(excludeGlobList, filepath.ToSlash(trimmed))
+			}
+		}
+	}
+	if *includeExts != "" {
+		for _, e := range strings.Split(*includeExts, ",") {
+			trimmed := strings.TrimSpace(e)
+			if trimmed == "" {
+				continue
+			}
+			if !strings.HasPrefix(trimmed, ".") {
+				trimmed = "." + trimmed
+			}
+			includeExtList = append(includeExtList, strings.ToLower(trimmed))
+		}
+	}
 
 	// Initialize verification pipeline if LLM is enabled
 	var pipeline *verification.Pipeline
@@ -177,15 +231,28 @@ func main() {
 		if err != nil {
 			return err
 		}
+
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+
 		if info.IsDir() {
-			if shouldIgnoreDir(path) {
+			if shouldIgnoreDir(path) || shouldSkipDirByUserFilters(rel) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
+
 		if shouldIgnoreFile(info) {
 			return nil
 		}
+
+		if shouldSkipFileByUserFilters(rel, info) {
+			return nil
+		}
+
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(p string) {
@@ -208,58 +275,115 @@ func main() {
 
 	wg.Wait()
 
-	if len(secretsFound) > 0 {
-		fmt.Printf("\n%s%s%s\n", YellowColor, SeparatorLine, ResetColor)
-		fmt.Printf("%sSecrets found:%s\n", RedColor, ResetColor)
-
-		// Group by confidence level
-		critical := []Secret{}
-		high := []Secret{}
-		medium := []Secret{}
-
-		for _, secret := range secretsFound {
-			switch secret.Confidence {
-			case "critical":
-				critical = append(critical, secret)
-			case "high":
-				high = append(high, secret)
-			case "medium":
-				medium = append(medium, secret)
-			}
-		}
-
-		// Display critical findings first
-		if len(critical) > 0 {
-			fmt.Printf("\n%s=== CRITICAL FINDINGS ===%s\n", RedColor, ResetColor)
-			for _, secret := range critical {
-				displaySecret(secret)
-			}
-		}
-
-		// Then high confidence
-		if len(high) > 0 {
-			fmt.Printf("\n%s=== HIGH CONFIDENCE ===%s\n", RedColor, ResetColor)
-			for _, secret := range high {
-				displaySecret(secret)
-			}
-		}
-
-		// Then medium confidence
-		if len(medium) > 0 {
-			fmt.Printf("\n%s=== MEDIUM CONFIDENCE ===%s\n", YellowColor, ResetColor)
-			for _, secret := range medium {
-				displaySecret(secret)
-			}
-		}
-
-		fmt.Printf("\n%s%s\n", YellowColor, SeparatorLine)
-		fmt.Printf("%sSummary: %d secrets found (Critical: %d, High: %d, Medium: %d)%s\n",
-			RedColor, len(secretsFound), len(critical), len(high), len(medium), ResetColor)
-		fmt.Printf("%sPlease review and remove them before committing your code.%s\n", RedColor, ResetColor)
-		os.Exit(1)
-	} else {
-		fmt.Printf("%sNo secrets found.%s\n", GreenColor, ResetColor)
+	mode := strings.ToLower(*modeFlag)
+	if mode != "detect" && mode != "protect" && mode != "report" {
+		mode = "detect"
 	}
+
+	output := strings.ToLower(*outputFormat)
+	redact := *redactOutput
+
+	// Determine the failure threshold from --fail-on
+	failThreshold := 1
+	switch strings.ToLower(*failOn) {
+	case "critical":
+		failThreshold = 4
+	case "high":
+		failThreshold = 3
+	case "medium":
+		failThreshold = 2
+	case "low":
+		failThreshold = 1
+	}
+
+	// Decide whether this run should be considered a failure
+	shouldFail := false
+	for _, s := range secretsFound {
+		if confidenceScore(s.Confidence) >= failThreshold {
+			shouldFail = true
+			break
+		}
+	}
+
+	switch output {
+	case "json":
+		out := make([]Secret, len(secretsFound))
+		for i, s := range secretsFound {
+			out[i] = maybeRedactSecret(s, redact)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to encode JSON output: %v\n", err)
+		}
+	case "sarif":
+		if err := emitSarif(secretsFound, redact); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to encode SARIF output: %v\n", err)
+		}
+	default:
+		if len(secretsFound) > 0 {
+			fmt.Printf("\n%s%s%s\n", YellowColor, SeparatorLine, ResetColor)
+			fmt.Printf("%sSecrets found:%s\n", RedColor, ResetColor)
+
+			// Group by confidence level
+			critical := []Secret{}
+			high := []Secret{}
+			medium := []Secret{}
+
+			for _, secret := range secretsFound {
+				switch secret.Confidence {
+				case "critical":
+					critical = append(critical, secret)
+				case "high":
+					high = append(high, secret)
+				case "medium":
+					medium = append(medium, secret)
+				}
+			}
+
+			// Display critical findings first
+			if len(critical) > 0 {
+				fmt.Printf("\n%s=== CRITICAL FINDINGS ===%s\n", RedColor, ResetColor)
+				for _, secret := range critical {
+					displaySecret(maybeRedactSecret(secret, redact))
+				}
+			}
+
+			// Then high confidence
+			if len(high) > 0 {
+				fmt.Printf("\n%s=== HIGH CONFIDENCE ===%s\n", RedColor, ResetColor)
+				for _, secret := range high {
+					displaySecret(maybeRedactSecret(secret, redact))
+				}
+			}
+
+			// Then medium confidence
+			if len(medium) > 0 {
+				fmt.Printf("\n%s=== MEDIUM CONFIDENCE ===%s\n", YellowColor, ResetColor)
+				for _, secret := range medium {
+					displaySecret(maybeRedactSecret(secret, redact))
+				}
+			}
+
+			fmt.Printf("\n%s%s\n", YellowColor, SeparatorLine)
+			fmt.Printf("%sSummary: %d secrets found (Critical: %d, High: %d, Medium: %d)%s\n",
+				RedColor, len(secretsFound), len(critical), len(high), len(medium), ResetColor)
+			fmt.Printf("%sPlease review and remove them before committing your code.%s\n", RedColor, ResetColor)
+		} else {
+			fmt.Printf("%sNo secrets found.%s\n", GreenColor, ResetColor)
+		}
+	}
+
+	// Mode/reporting based exit codes
+	if mode == "report" {
+		os.Exit(0)
+	}
+
+	if shouldFail && len(secretsFound) > 0 {
+		os.Exit(1)
+	}
+
+	os.Exit(0)
 }
 
 func displaySecret(secret Secret) {
@@ -275,6 +399,143 @@ func displaySecret(secret Secret) {
 	fmt.Printf("%sContext:%s %s\n", YellowColor, ResetColor, secret.Context)
 	fmt.Printf("%sPattern:%s %s\n", YellowColor, ResetColor, secret.Type)
 	fmt.Printf("%sLine:%s %s\n", YellowColor, ResetColor, secret.Line)
+}
+
+func maybeRedactSecret(s Secret, redact bool) Secret {
+	if !redact {
+		return s
+	}
+
+	redacted := s
+
+	if redacted.Match != "" {
+		redacted.Match = "****REDACTED****"
+	}
+
+	if redacted.Line != "" && s.Match != "" {
+		redacted.Line = strings.ReplaceAll(redacted.Line, s.Match, "****REDACTED****")
+	}
+
+	return redacted
+}
+
+func confidenceScore(level string) int {
+	switch strings.ToLower(level) {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Minimal SARIF 2.1.0 structures and encoder
+
+type sarifReport struct {
+	Version string     `json:"version"`
+	Runs    []sarifRun `json:"runs"`
+}
+
+type sarifRun struct {
+	Tool    sarifTool     `json:"tool"`
+	Results []sarifResult `json:"results"`
+}
+
+type sarifTool struct {
+	Driver sarifDriver `json:"driver"`
+}
+
+type sarifDriver struct {
+	Name string `json:"name"`
+}
+
+type sarifResult struct {
+	RuleID    string          `json:"ruleId"`
+	Level     string          `json:"level,omitempty"`
+	Message   sarifMessage    `json:"message"`
+	Locations []sarifLocation `json:"locations,omitempty"`
+}
+
+type sarifMessage struct {
+	Text string `json:"text"`
+}
+
+type sarifLocation struct {
+	PhysicalLocation sarifPhysicalLocation `json:"physicalLocation"`
+}
+
+type sarifPhysicalLocation struct {
+	ArtifactLocation sarifArtifactLocation `json:"artifactLocation"`
+	Region           *sarifRegion          `json:"region,omitempty"`
+}
+
+type sarifArtifactLocation struct {
+	URI string `json:"uri"`
+}
+
+type sarifRegion struct {
+	StartLine int `json:"startLine,omitempty"`
+}
+
+func emitSarif(secrets []Secret, redact bool) error {
+	results := make([]sarifResult, 0, len(secrets))
+	for _, s := range secrets {
+		rs := maybeRedactSecret(s, redact)
+
+		level := "warning"
+		switch strings.ToLower(rs.Confidence) {
+		case "critical", "high":
+			level = "error"
+		case "medium":
+			level = "warning"
+		case "low":
+			level = "note"
+		}
+
+		ruleID := rs.RuleID
+		if ruleID == "" {
+			ruleID = rs.Type
+		}
+
+		result := sarifResult{
+			RuleID: ruleID,
+			Level:  level,
+			Message: sarifMessage{
+				Text: fmt.Sprintf("Potential secret detected (%s)", rs.Type),
+			},
+		}
+
+		location := sarifLocation{
+			PhysicalLocation: sarifPhysicalLocation{
+				ArtifactLocation: sarifArtifactLocation{URI: rs.FilePath},
+				Region:           &sarifRegion{StartLine: rs.LineNumber},
+			},
+		}
+		result.Locations = []sarifLocation{location}
+
+		results = append(results, result)
+	}
+
+	report := sarifReport{
+		Version: "2.1.0",
+		Runs: []sarifRun{
+			{
+				Tool: sarifTool{
+					Driver: sarifDriver{Name: "GoSecretScanv2"},
+				},
+				Results: results,
+			},
+		},
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(report)
 }
 
 func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret, error) {
@@ -360,21 +621,29 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 
 						// LLM is advisory-only: attach reasoning but do not suppress regex hits.
 						secrets = append(secrets, Secret{
-							File:       fmt.Sprintf("%s (%s) [LLM: %s]", path, secretType, result.Reasoning),
-							LineNumber: lineNumber,
-							Line:       line,
-							Type:       secretPatterns[index],
-							Confidence: confidence,
-							Entropy:    entropy,
-							Context:    context,
+							File:               fmt.Sprintf("%s (%s) [LLM: %s]", path, secretType, result.Reasoning),
+							FilePath:           path,
+							LineNumber:         lineNumber,
+							Line:               line,
+							Match:              matchedSecret,
+							RuleID:             fmt.Sprintf("pattern-%d", index),
+							Type:               secretPatterns[index],
+							Confidence:         confidence,
+							Entropy:            entropy,
+							Context:            context,
+							Verified:           result.IsRealSecret,
+							VerificationReason: result.Reasoning,
 						})
 					} else {
 						// Fall back to non-LLM if verification fails
 						if confidence != "low" {
 							secrets = append(secrets, Secret{
 								File:       fmt.Sprintf("%s (%s)", path, secretType),
+								FilePath:   path,
 								LineNumber: lineNumber,
 								Line:       line,
+								Match:      matchedSecret,
+								RuleID:     fmt.Sprintf("pattern-%d", index),
 								Type:       secretPatterns[index],
 								Confidence: confidence,
 								Entropy:    entropy,
@@ -386,8 +655,11 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 					// No LLM pipeline or low confidence - use standard detection
 					secrets = append(secrets, Secret{
 						File:       fmt.Sprintf("%s (%s)", path, secretType),
+						FilePath:   path,
 						LineNumber: lineNumber,
 						Line:       line,
+						Match:      matchedSecret,
+						RuleID:     fmt.Sprintf("pattern-%d", index),
 						Type:       secretPatterns[index],
 						Confidence: confidence,
 						Entropy:    entropy,
@@ -462,7 +734,7 @@ func shouldIgnoreDir(path string) bool {
 }
 
 func shouldIgnoreFile(info os.FileInfo) bool {
-	if info.Size() > maxFileSizeBytes {
+	if info.Size() > maxFileSizeLimit {
 		return true
 	}
 
@@ -482,6 +754,52 @@ func shouldIgnoreFile(info os.FileInfo) bool {
 	// Skip obvious minified bundles
 	if strings.HasSuffix(name, ".min.js") || strings.HasSuffix(name, ".min.css") {
 		return true
+	}
+
+	return false
+}
+
+func matchAnyGlob(path string, patterns []string) bool {
+	for _, p := range patterns {
+		if p == "" {
+			continue
+		}
+		if ok, _ := filepath.Match(p, path); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSkipDirByUserFilters(relPath string) bool {
+	if len(excludeGlobList) > 0 && matchAnyGlob(relPath, excludeGlobList) {
+		return true
+	}
+	return false
+}
+
+func shouldSkipFileByUserFilters(relPath string, info os.FileInfo) bool {
+	if len(includeGlobList) > 0 && !matchAnyGlob(relPath, includeGlobList) {
+		return true
+	}
+
+	if len(excludeGlobList) > 0 && matchAnyGlob(relPath, excludeGlobList) {
+		return true
+	}
+
+	if len(includeExtList) > 0 {
+		name := strings.ToLower(info.Name())
+		ext := strings.ToLower(filepath.Ext(name))
+		matched := false
+		for _, e := range includeExtList {
+			if ext == e {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return true
+		}
 	}
 
 	return false
