@@ -411,9 +411,9 @@ func main() {
 	}
 
 	// Helper to print status messages (stderr for JSON/SARIF, stdout for text)
-	outputFormat := *output
+	outFmt := *outputFormat
 	statusPrint := func(format string, args ...interface{}) {
-		if outputFormat == "json" || outputFormat == "sarif" {
+		if outFmt == "json" || outFmt == "sarif" {
 			fmt.Fprintf(os.Stderr, format, args...)
 		} else {
 			fmt.Printf(format, args...)
