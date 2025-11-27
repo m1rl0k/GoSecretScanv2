@@ -26,64 +26,237 @@ const (
 )
 
 var (
+	// Comprehensive secret patterns - organized by provider/type
+	// Patterns are ordered from most specific to most generic to minimize false positives
 	secretPatterns = []string{
-		`(?i)_(Private_Key):[-]{5}BEGIN\\s(?:[DR]SA|OPENSSH|EC|PGP)\\sPRIVATE\\sKEY(?:\\sBLOCK)?[-]{5}`,
-		`(?i)_(AWS_Key):[\\s'\"=]A[KS]IA[0-9A-Z]{16}[\\s'\"]`,
-		`(?i)_(AWS_Key_line_end):[\\s=]A[KS]IA[0-9A-Z]{16}$`,
-		`(?i)_(Slack_token):xox[pboa]-[0-9]{11,12}-[0-9]{12}-[0-9]{12}-[a-z0-9]{32}`,
-		`(?i)_(Basic_Auth):Authorization:\\sBasic\\s(?:[a-zA-Z0-9\\+/]{4})*(?:[a-zA-Z0-9\\+/]{3}=|[a-zA-Z0-9\\+/]{2}==)?(?:$|[\\s;'\"])`,
-		`(?i)_(Basic_Auth_Only_Pattern):Basic\\s(?:[a-zA-Z0-9\\+/]{4})*(?:[a-zA-Z0-9\\+/]{3}=|[a-zA-Z0-9\\+/]{2}==)?(?:$|[\\s;'\"])`,
-		`(?i)(aws_secret_access_key|aws_access_key_id|password|pass|passwd|user|username|key|apikey|accesskey|secret)[\\s\\r\\n]*=[\\s\\r\\n]*('[^']*'|\"[^\"]*\")`,
-		`(?i)(client_id|client_secret|subscription_id|tenant_id|access_key|account_key|primary_access_key|secondary_access_key)[\\s\\r\\n]*=[\\s\\r\\n]*('[^']*'|\"[^\"]*\")`,
-		`(?i)provider\\s*\"azurerm\"\\s*{\\s*features\\s*{\\s*}\\s*subscription_id\\s*=\\s*\"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\"\\s*tenant_id\\s*=\\s*\"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\"\\s*client_id\\s*=\\s*\"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\"\\s*client_secret\\s*=\\s*\"([^\\s]+)\"\\s*}`,
-		`(?i)(api|app|client)_?(key|id|secret)(\s*[:=]\s*|\s*['"])([\w\-\/+]{10,})(\s*['"])`,
-		`(?i)(username|password)\s*=\s*('[^']*'|\"[^\"]*\")`,
-		`(?i)aws_access_key_id\s*=\s*"AKIA[0-9A-Z]{16}"`,
-		`(?i)aws_secret_access_key\s*=\s*"[0-9a-zA-Z/+]{40}"`,
-		`(?i)api_key(?:\s*[:=]\s*|\s*["'\s])?([a-zA-Z0-9_\-]{32,})`,
-		`(?i)password(?:\s*[:=]\s*|\s*["'\s])?([a-zA-Z0-9!@#$%^&*()_+]{8,})`,
-		`(?i)azure_client_(?:id|secret)\s*=\s*"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"`,
-		`(?i)azure_tenant_id\s*=\s*"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"`,
-		`(?i)azure_subscription_id\s*=\s*"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"`,
-		`(?i)google_application_credentials\s*=\s*"([a-zA-Z0-9\-]+\.json)"`,
-		`(?i)google_client_(?:id|secret)\s*=\s*"([0-9]{12}-[a-zA-Z0-9_]{32})"`,
-		`(?i)google_project(?:\s*[:=]\s*|\s*["'\s])?([a-z][a-z0-9-]{4,28}[a-z0-9])`,
-		`(?i)google_credentials(?:\s*[:=]\s*|\s*["'\s])?([a-zA-Z0-9\-]+\.json)"`,
-		`(?i)private_key(?:_id)?\s*=\s*"([0-9a-f]{64})"`,
-		`(?i)client_email\s*=\s*"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Z]{2,})"`,
-		`(?i)client_id\s*=\s*"([0-9]{12}-[a-zA-Z0-9_]{32})"`,
-		`(?i)client_secret\s*=\s*"([a-zA-Z0-9_]{24})"`,
-		`(?i)client_x509_cert_url\s*=\s*"(https://[a-z0-9\-]+\.googleusercontent\.com/[^"']{1,200})"`,
-		`(?i)token_uri\s*=\s*"(https://(?:accounts\.)?google\.com/o/oauth2/token)"`,
-		`(?i)auth_uri\s*=\s*"(https://(?:accounts\.)?google\.com/o/oauth2/auth)"`,
-		`(?i)_(AWS_STS_Token):FQoG.*[^\\w]`,                                                                                               // AWS Security Token Service (STS) token
-		`(?i)_(AWS_Access_Key_ID):[^\\w]AKIA[0-9A-Z]{16}[^\\w]`,                                                                           // AWS access key ID
-		`(?i)_(API_Key):[^\\w]Bearer [0-9a-f]{32}`,                                                                                        // API key
-		`(?i)_(AWS_Secret_Key):[\\s'\"=]AKIA[0-9A-Z]{16}[\\s'\"$]`,                                                                        // AWS secret access key
-		`(?i)_(Basic_Auth2):Authorization:\\sBasic\\s(?:[a-zA-Z0-9\\+/]{4})*(?:[a-zA-Z0-9\\+/]{3}=|[a-zA-Z0-9\\+/]{2}==)?(?:$|[\\s;'\"])`, // Basic auth token
-		`(?i)_(SSH_Key):-{5}BEGIN\\s(?:[DR]SA|OPENSSH|EC|PGP)\\sPRIVATE\\sKEY(?:\\sBLOCK)?-{5}`,                                           // SSH private key
-		`(?i)_(RSA_Key):-{5}BEGIN\\sRSA\\sPRIVATE\\sKEY(?:\\sBLOCK)?-{5}`,                                                                 // RSA private key
-		`(?i)_(Private_Key):-----BEGIN PRIVATE KEY-----[^-]+-----END PRIVATE KEY-----`,                                                    // Private key
-		`(?i)_(PGP_Private_Key):-----BEGIN PGP PRIVATE KEY BLOCK----[^-]+-----END PGP PRIVATE KEY BLOCK-----`,                             // PGP private key
-		`(?i)_(GCP_API_Key):[^\\w]AIza[0-9A-Za-z_-]{35}[^\\w]`,                                                                            // Google Cloud Platform (GCP) API key
-		`(?i)_(SecretsAWS):[^\\w](aws_secret_access_key|aws_access_key_id|password|pass|passwd|user|username|key|apikey|accesskey|secret)[\\s\\r\\n]*=[\\s\\r\\n]*('[^']*'|\"[^\"]*\")[^\\w]`,
-		`(?i)_(SecretsAZURE):[^\\w](client_id|client_secret|subscription_id|tenant_id|access_key|account_key|primary_access_key|secondary_access_key)[\\s\\r\\n]*=[\\s\\r\\n]*('[^']*'|\"[^\"]*\")[^\\w]`, // Azure secret
-		`(?i)_(GitHub_API_Token):[^\\w]ghp_[A-Za-z0-9_]{30,40}`, // GitHub API token
-		`(?i)_(Keys):(?:(?:a(?:ws|ccess|p(?:i|p(?:lication)?)))|private|se(?:nsitive|cret))[\\s_-]?key\\s{1,20}[=:]{1,2}\\s{0,20}['\"]?(?:[^\\sa-z;'\",\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,1000})[\\s;'\",]`,
-		`(?i)_(Keys_no_space):(?:(?:a(?:ws|ccess|p(?:i|p(?:lication)?)))|private|se(?:nsitive|cret))[\\s_-]?key[=:]{1,2}\\s{0,20}['\"]?(?:[^\\sa-z;',\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,1000})[\\s;',]`,
-		`(?i)_(Password_Generic_with_quotes):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret)['\"]?\\s{0,20}[=:]{1,3}\\s{0,20}[@]?['\"]([^\\sa-z;'\",\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})['\"]`,
-		`(?i)_(Password_equal_no_quotes):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret)\s{0,20}[=]\s{0,20}([a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45}[^\\sa-z;',\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})(?:(?:<\/)|[\s;',]|$)`,
-		`(?i)_(Password_value):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret).{0,10}value[=]['\"]([^\\sa-z;'\",\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})['\"]`,
-		`(?i)_(Password_primary):(?:(?:pass(?:w(?:or)?d)?)|(?:p(?:s)?w(?:r)?d)|secret)\\sprimary[=]['\"]([^\\sa-z;'\",\\/._-][a-z0-9!?$)=<\/>%@#*&{}_^-]{0,45})(?:['"\\s;,\"]|$)`,
-		`(?i)encryPublicKey\s*=\s*\"([A-Za-z0-9+/=\r\n]+)\"`,
-		`(?i)decryPrivateKey\s*=\s*\"([A-Za-z0-9+/=\r\n]+)\"`,
-		`(?i)AIza[0-9A-Za-z_-]{29,45}`,
-		`(?i)sk_(?:live|test)_[0-9A-Za-z]{24,}`,
-		`(?i)xox(?:p|b|o|a|r)-[0-9A-Za-z-]{10,}`,
-		`(?i)-----BEGIN\sPRIVATE\sKEY-----`,
-		`(?i)(?:postgres|mysql|mariadb|mongodb|redis)://[^:\\s]+:[^@\\s]+@[^/\\s]+`,
-		`(?i)AKIA[0-9A-Z]{16}`,
-		`(?i)ghp_[A-Za-z0-9]{30,}`,
+		// ===== CLOUD PROVIDERS =====
+		// AWS
+		`AKIA[0-9A-Z]{16}`, // AWS Access Key ID
+		`ABIA[0-9A-Z]{16}`, // AWS STS Service Bearer Token
+		`ACCA[0-9A-Z]{16}`, // AWS Context-specific credentials
+		`ASIA[0-9A-Z]{16}`, // AWS Temporary (STS) Access Key
+		`(?i)aws_?secret_?access_?key["'\s:=]+[A-Za-z0-9/+=]{40}`, // AWS Secret Access Key
+		`(?i)aws_?session_?token["'\s:=]+[A-Za-z0-9/+=]{100,}`,    // AWS Session Token
+		// GCP / Google
+		`AIza[0-9A-Za-z_-]{35}`,                                 // Google API Key
+		`(?i)google_?api_?key["'\s:=]+AIza[0-9A-Za-z_-]{35}`,    // Google API Key with label
+		`[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com`, // Google OAuth Client ID
+		`ya29\.[0-9A-Za-z_-]+`,                                  // Google OAuth Access Token
+		// Azure
+		`(?i)azure[_-]?(?:client|tenant|subscription)[_-]?(?:id|secret)["'\s:=]+[0-9a-f-]{36}`, // Azure IDs
+		`(?i)(?:DefaultEndpointsProtocol|AccountName|AccountKey)=[^;\s"']+`,                    // Azure Storage Connection String
+		`(?i)SharedAccessSignature=sv=[^;\s"']+`,                                               // Azure SAS Token
+		// IBM Cloud
+		`(?i)ibm[_-]?(?:api[_-]?key|cloud[_-]?key)["'\s:=]+[A-Za-z0-9_-]{44}`, // IBM Cloud API Key
+		// Alibaba Cloud
+		`LTAI[0-9A-Za-z]{20}`, // Alibaba Cloud Access Key ID
+		// DigitalOcean
+		`dop_v1_[0-9a-f]{64}`, // DigitalOcean Personal Access Token
+		`doo_v1_[0-9a-f]{64}`, // DigitalOcean OAuth Token
+		// Linode
+		`(?i)linode[_-]?(?:api[_-]?)?token["'\s:=]+[0-9a-f]{64}`, // Linode API Token
+		// Vultr
+		`(?i)vultr[_-]?api[_-]?key["'\s:=]+[A-Z0-9]{36}`, // Vultr API Key
+		// Heroku
+		`(?i)heroku[_-]?api[_-]?key["'\s:=]+[0-9a-f-]{36}`,             // Heroku API Key
+		`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`, // Heroku OAuth Token (UUID format)
+
+		// ===== VERSION CONTROL =====
+		// GitHub
+		`ghp_[A-Za-z0-9]{36}`,                        // GitHub Personal Access Token
+		`gho_[A-Za-z0-9]{36}`,                        // GitHub OAuth Access Token
+		`ghu_[A-Za-z0-9]{36}`,                        // GitHub User-to-Server Token
+		`ghs_[A-Za-z0-9]{36}`,                        // GitHub Server-to-Server Token
+		`ghr_[A-Za-z0-9]{36}`,                        // GitHub Refresh Token
+		`github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}`, // GitHub Fine-grained PAT
+		// GitLab
+		`glpat-[A-Za-z0-9_-]{20}`,    // GitLab Personal Access Token
+		`glptt-[A-Za-z0-9_-]{40}`,    // GitLab Pipeline Trigger Token
+		`GR1348941[A-Za-z0-9_-]{20}`, // GitLab Runner Token
+		// Bitbucket
+		`(?i)bitbucket[_-]?(?:api[_-]?)?(?:key|token|secret)["'\s:=]+[A-Za-z0-9]{32}`, // Bitbucket tokens
+
+		// ===== CI/CD =====
+		// CircleCI
+		`(?i)circle[_-]?(?:ci[_-]?)?token["'\s:=]+[0-9a-f]{40}`, // CircleCI Token
+		// Travis CI
+		`(?i)travis[_-]?(?:ci[_-]?)?token["'\s:=]+[A-Za-z0-9]{22}`, // Travis CI Token
+		// Jenkins
+		`(?i)jenkins[_-]?(?:api[_-]?)?token["'\s:=]+[0-9a-f]{32,34}`, // Jenkins API Token
+		// Drone CI
+		`(?i)drone[_-]?token["'\s:=]+[A-Za-z0-9]{32}`, // Drone CI Token
+
+		// ===== PAYMENT PROCESSORS =====
+		// Stripe
+		`sk_live_[0-9a-zA-Z]{24,}`, // Stripe Live Secret Key
+		`sk_test_[0-9a-zA-Z]{24,}`, // Stripe Test Secret Key
+		`rk_live_[0-9a-zA-Z]{24,}`, // Stripe Live Restricted Key
+		`rk_test_[0-9a-zA-Z]{24,}`, // Stripe Test Restricted Key
+		`pk_live_[0-9a-zA-Z]{24,}`, // Stripe Live Publishable Key
+		`pk_test_[0-9a-zA-Z]{24,}`, // Stripe Test Publishable Key
+		`whsec_[0-9a-zA-Z]{32,}`,   // Stripe Webhook Secret
+		// Square
+		`sq0atp-[0-9A-Za-z_-]{22}`, // Square Access Token
+		`sq0csp-[0-9A-Za-z_-]{43}`, // Square OAuth Secret
+		`EAAAE[A-Za-z0-9]{59}`,     // Square Production Application Secret
+		// PayPal
+		`(?i)paypal[_-]?(?:client[_-]?)?secret["'\s:=]+[A-Za-z0-9]{32,}`, // PayPal Secret
+		// Braintree
+		`(?i)braintree[_-]?(?:private[_-]?)?key["'\s:=]+[a-f0-9]{32}`, // Braintree Private Key
+
+		// ===== COMMUNICATION =====
+		// Slack
+		`xoxp-[0-9]{10,13}-[0-9]{10,13}-[0-9]{10,13}-[a-z0-9]{32}`,              // Slack User Token
+		`xoxb-[0-9]{10,13}-[0-9]{10,13}-[A-Za-z0-9]{20,}`,                       // Slack Bot Token
+		`xoxa-[0-9]{10,13}-[0-9]{10,13}-[A-Za-z0-9]{20,}`,                       // Slack App Token
+		`xoxr-[0-9]{10,13}-[0-9]{10,13}-[A-Za-z0-9]{20,}`,                       // Slack Refresh Token
+		`https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+`, // Slack Webhook URL
+		// Discord
+		`(?i)discord[_-]?(?:bot[_-]?)?token["'\s:=]+[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}`, // Discord Bot Token
+		`https://discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+`,                                      // Discord Webhook URL
+		// Twilio
+		`AC[0-9a-f]{32}`, // Twilio Account SID
+		`SK[0-9a-f]{32}`, // Twilio API Key SID
+		`(?i)twilio[_-]?auth[_-]?token["'\s:=]+[0-9a-f]{32}`, // Twilio Auth Token
+		// Telegram
+		`[0-9]{8,10}:[A-Za-z0-9_-]{35}`, // Telegram Bot Token
+		// SendGrid
+		`SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}`, // SendGrid API Key
+		// Mailgun
+		`key-[0-9a-zA-Z]{32}`, // Mailgun API Key
+		`(?i)mailgun[_-]?api[_-]?key["'\s:=]+key-[0-9a-zA-Z]{32}`, // Mailgun API Key with label
+		// Mailchimp
+		`[0-9a-f]{32}-us[0-9]{1,2}`, // Mailchimp API Key
+		// Postmark
+		`(?i)postmark[_-]?(?:api[_-]?)?(?:token|key)["'\s:=]+[0-9a-f-]{36}`, // Postmark API Token
+
+		// ===== DATABASES =====
+		`(?i)(?:mongodb|mongo)(?:\+srv)?://[^:\s]+:[^@\s]+@[^\s/]+`,       // MongoDB Connection String
+		`(?i)postgres(?:ql)?://[^:\s]+:[^@\s]+@[^\s/]+`,                   // PostgreSQL Connection String
+		`(?i)mysql://[^:\s]+:[^@\s]+@[^\s/]+`,                             // MySQL Connection String
+		`(?i)redis://[^:\s]*:[^@\s]+@[^\s/]+`,                             // Redis Connection String (with auth)
+		`(?i)amqp://[^:\s]+:[^@\s]+@[^\s/]+`,                              // RabbitMQ Connection String
+		`(?i)(?:jdbc:)?(?:mysql|postgresql|oracle|sqlserver)://[^;\s"']+`, // JDBC Connection Strings
+
+		// ===== PACKAGE MANAGERS =====
+		`npm_[A-Za-z0-9]{36}`,                                        // npm Access Token
+		`(?i)_auth\s*=\s*[A-Za-z0-9+/=]{50,}`,                        // npm _auth token (base64)
+		`pypi-[A-Za-z0-9_-]{50,}`,                                    // PyPI API Token
+		`rubygems_[0-9a-f]{48}`,                                      // RubyGems API Key
+		`(?i)gem[_-]?(?:host[_-]?)?api[_-]?key["'\s:=]+[0-9a-f]{48}`, // RubyGems with label
+		`GOPRIVATE.*token.*[A-Za-z0-9_-]{40}`,                        // Go private module token
+		`nuget[_-]?api[_-]?key["'\s:=]+[a-z0-9-]{36}`,                // NuGet API Key
+
+		// ===== CONTAINER REGISTRIES =====
+		`(?i)docker[_-]?(?:hub[_-]?)?(?:password|token)["'\s:=]+[A-Za-z0-9_-]{36,}`, // Docker Hub
+		`(?i)(?:ghcr|gcr|acr|ecr)[_-]?token["'\s:=]+[A-Za-z0-9_-]{36,}`,             // Container registry tokens
+
+		// ===== MONITORING / ANALYTICS =====
+		// Datadog
+		`(?i)(?:datadog|dd)[_-]?api[_-]?key["'\s:=]+[a-f0-9]{32}`, // Datadog API Key
+		`(?i)(?:datadog|dd)[_-]?app[_-]?key["'\s:=]+[a-f0-9]{40}`, // Datadog App Key
+		// New Relic
+		`NRAK-[A-Z0-9]{27}`, // New Relic API Key
+		`(?i)new[_-]?relic[_-]?license[_-]?key["'\s:=]+[a-f0-9]{40}`, // New Relic License Key
+		// Sentry
+		`https://[a-f0-9]{32}@(?:o[0-9]+\.)?ingest\.sentry\.io/[0-9]+`, // Sentry DSN
+		// PagerDuty
+		`(?i)pagerduty[_-]?(?:api[_-]?)?(?:token|key)["'\s:=]+[A-Za-z0-9+_-]{20}`, // PagerDuty Token
+		// Splunk
+		`(?i)splunk[_-]?(?:hec[_-]?)?token["'\s:=]+[0-9a-f-]{36}`, // Splunk HEC Token
+
+		// ===== AUTHENTICATION =====
+		// Auth0
+		`(?i)auth0[_-]?(?:client[_-]?)?secret["'\s:=]+[A-Za-z0-9_-]{32,}`, // Auth0 Client Secret
+		// Okta
+		`(?i)okta[_-]?(?:api[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{42}`, // Okta API Token
+		// Firebase
+		`(?i)firebase[_-]?(?:api[_-]?)?key["'\s:=]+AIza[0-9A-Za-z_-]{35}`, // Firebase API Key
+		`AAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{140}`,                         // Firebase Cloud Messaging Token
+
+		// ===== CRYPTOGRAPHIC KEYS =====
+		`-----BEGIN\s(?:RSA\s)?PRIVATE\sKEY-----`,   // RSA Private Key
+		`-----BEGIN\sOPENSSH\sPRIVATE\sKEY-----`,    // OpenSSH Private Key
+		`-----BEGIN\sEC\sPRIVATE\sKEY-----`,         // EC Private Key
+		`-----BEGIN\sPGP\sPRIVATE\sKEY\sBLOCK-----`, // PGP Private Key
+		`-----BEGIN\sDSA\sPRIVATE\sKEY-----`,        // DSA Private Key
+		`-----BEGIN\sENCRYPTED\sPRIVATE\sKEY-----`,  // Encrypted Private Key
+
+		// ===== JWT / OAUTH =====
+		`eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`,  // JWT Token
+		`(?i)bearer\s+[A-Za-z0-9_-]{20,}\.?[A-Za-z0-9_-]*\.?[A-Za-z0-9_-]*`, // Bearer Token
+		`(?i)oauth[_-]?(?:access[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{20,}`,    // OAuth Access Token
+
+		// ===== MISC SERVICES =====
+		// Shopify
+		`shppa_[a-f0-9]{32}`, // Shopify Private App Password
+		`shpat_[a-f0-9]{32}`, // Shopify Access Token
+		`shpss_[a-f0-9]{32}`, // Shopify Shared Secret
+		// Atlassian
+		`(?i)atlassian[_-]?api[_-]?token["'\s:=]+[A-Za-z0-9]{24}`, // Atlassian API Token
+		// Airtable
+		`(?i)airtable[_-]?api[_-]?key["'\s:=]+key[A-Za-z0-9]{14}`, // Airtable API Key
+		// Asana
+		`(?i)asana[_-]?(?:access[_-]?)?token["'\s:=]+[0-9]/[0-9]{16}:[A-Za-z0-9]{32}`, // Asana Token
+		// Zendesk
+		`(?i)zendesk[_-]?api[_-]?token["'\s:=]+[A-Za-z0-9]{40}`, // Zendesk API Token
+		// Intercom
+		`(?i)intercom[_-]?(?:access[_-]?)?token["'\s:=]+dG9[A-Za-z0-9+/=]+`, // Intercom Access Token (base64)
+		// Dropbox
+		`sl\.[A-Za-z0-9_-]{130,}`, // Dropbox Access Token
+		// Box
+		`(?i)box[_-]?(?:access[_-]?)?token["'\s:=]+[A-Za-z0-9]{32}`, // Box Access Token
+		// Cloudflare
+		`(?i)cloudflare[_-]?(?:api[_-]?)?(?:token|key)["'\s:=]+[A-Za-z0-9_-]{37,}`, // Cloudflare API Token
+		// Netlify
+		`(?i)netlify[_-]?(?:access[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{40,}`, // Netlify Token
+		// Vercel
+		`(?i)vercel[_-]?(?:access[_-]?)?token["'\s:=]+[A-Za-z0-9]{24}`, // Vercel Token
+		// Supabase
+		`sbp_[a-f0-9]{40}`, // Supabase Service Key
+		`eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`, // Supabase JWT (specific header)
+		// Linear
+		`lin_api_[A-Za-z0-9]{40}`, // Linear API Key
+		// Notion
+		`secret_[A-Za-z0-9]{43}`, // Notion Integration Token
+		// Figma
+		`figd_[A-Za-z0-9_-]{40,}`, // Figma Personal Access Token
+		// OpenAI
+		`sk-[A-Za-z0-9]{48}`, // OpenAI API Key
+		// Anthropic
+		`sk-ant-[A-Za-z0-9_-]{80,}`, // Anthropic API Key
+		// Hugging Face
+		`hf_[A-Za-z0-9]{34}`, // Hugging Face Token
+		// Replicate
+		`r8_[A-Za-z0-9]{40}`, // Replicate API Token
+		// Mapbox
+		`pk\.[A-Za-z0-9]{60,}`, // Mapbox Public Key
+		`sk\.[A-Za-z0-9]{60,}`, // Mapbox Secret Key
+		// Algolia
+		`(?i)algolia[_-]?(?:admin[_-]?)?api[_-]?key["'\s:=]+[a-f0-9]{32}`, // Algolia Admin API Key
+		// Segment
+		`(?i)segment[_-]?(?:write[_-]?)?key["'\s:=]+[A-Za-z0-9]{32}`, // Segment Write Key
+		// Mixpanel
+		`(?i)mixpanel[_-]?(?:api[_-]?)?(?:token|secret)["'\s:=]+[a-f0-9]{32}`, // Mixpanel Token
+		// Amplitude
+		`(?i)amplitude[_-]?api[_-]?key["'\s:=]+[a-f0-9]{32}`, // Amplitude API Key
+		// LaunchDarkly
+		`(?i)launchdarkly[_-]?(?:sdk[_-]?)?key["'\s:=]+sdk-[a-f0-9-]{36}`, // LaunchDarkly SDK Key
+
+		// ===== GENERIC HIGH-SIGNAL PATTERNS =====
+		`(?i)(?:api|app|application)[_-]?key["'\s:=]+[A-Za-z0-9_-]{20,}`,      // Generic API Key
+		`(?i)(?:api|app|application)[_-]?secret["'\s:=]+[A-Za-z0-9_-]{20,}`,   // Generic API Secret
+		`(?i)secret[_-]?key["'\s:=]+[A-Za-z0-9_-]{20,}`,                       // Generic Secret Key
+		`(?i)access[_-]?token["'\s:=]+[A-Za-z0-9_-]{20,}`,                     // Generic Access Token
+		`(?i)auth[_-]?token["'\s:=]+[A-Za-z0-9_-]{20,}`,                       // Generic Auth Token
+		`(?i)private[_-]?key["'\s:=]+[A-Za-z0-9_-]{20,}`,                      // Generic Private Key
+		`(?i)signing[_-]?(?:key|secret)["'\s:=]+[A-Za-z0-9_-]{20,}`,           // Signing Key/Secret
+		`(?i)encryption[_-]?key["'\s:=]+[A-Za-z0-9_-]{16,}`,                   // Encryption Key
+		`(?i)(?:master|root)[_-]?(?:key|password|secret)["'\s:=]+[^\s"']{8,}`, // Master/Root credentials
+		`(?i)password["'\s:=]+[^\s"']{8,64}`,                                  // Generic Password assignment
+
+		// ===== URLS WITH CREDENTIALS =====
+		`(?i)https?://[^:\s]+:[^@\s]+@[^\s/]+`, // URL with embedded credentials
 	}
 	// Pre-compiled regex patterns for performance
 	compiledPatterns []*regexp.Regexp
@@ -260,17 +433,17 @@ func main() {
 
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(p string) {
+		go func(absPath, relPath string) {
 			defer func() { <-sem; wg.Done() }()
-			secrets, err := scanFileForSecrets(p, pipeline)
+			secrets, err := scanFileForSecrets(absPath, relPath, pipeline)
 			if err != nil {
-				fmt.Printf("Error scanning file %s: %v\n", p, err)
+				fmt.Printf("Error scanning file %s: %v\n", absPath, err)
 				return
 			}
 			mu.Lock()
 			secretsFound = append(secretsFound, secrets...)
 			mu.Unlock()
-		}(path)
+		}(path, rel)
 		return nil
 	})
 	if err != nil {
@@ -543,8 +716,8 @@ func emitSarif(secrets []Secret, redact bool) error {
 	return enc.Encode(report)
 }
 
-func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret, error) {
-	file, err := os.Open(path)
+func scanFileForSecrets(absPath, relPath string, pipeline *verification.Pipeline) ([]Secret, error) {
+	file, err := os.Open(absPath)
 	if err != nil {
 		return nil, err
 	}
@@ -557,12 +730,19 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 
 	lineNumber := 1
 	var secrets []Secret
+	seenLines := make(map[int]bool) // Track which lines already have findings to avoid duplicates
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
 		// Skip lines that are clearly regex pattern definitions
 		if isRegexPatternLine(line) {
+			lineNumber++
+			continue
+		}
+
+		// Skip if we already found a secret on this line (avoid duplicates from overlapping patterns)
+		if seenLines[lineNumber] {
 			lineNumber++
 			continue
 		}
@@ -602,7 +782,7 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 				entropy := calculateEntropy(matchedSecret)
 
 				// Detect context of the finding
-				context := detectContext(path, line)
+				context := detectContext(relPath, line)
 
 				// Calculate confidence based on entropy and context
 				confidence := calculateConfidence(matchedSecret, entropy, context, secretPatterns[index])
@@ -610,7 +790,7 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 				// Use LLM verification if available
 				if pipeline != nil && confidence != "low" {
 					result, err := pipeline.VerifyFinding(
-						path,
+						relPath,
 						lineNumber,
 						line,
 						secretPatterns[index],
@@ -626,8 +806,8 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 
 						// LLM is advisory-only: attach reasoning but do not suppress regex hits.
 						secrets = append(secrets, Secret{
-							File:               fmt.Sprintf("%s (%s) [LLM: %s]", path, secretType, result.Reasoning),
-							FilePath:           path,
+							File:               fmt.Sprintf("%s (%s) [LLM: %s]", relPath, secretType, result.Reasoning),
+							FilePath:           relPath,
 							LineNumber:         lineNumber,
 							Line:               line,
 							Match:              matchedSecret,
@@ -639,12 +819,13 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 							Verified:           result.IsRealSecret,
 							VerificationReason: result.Reasoning,
 						})
+						seenLines[lineNumber] = true
 					} else {
 						// Fall back to non-LLM if verification fails
 						if confidence != "low" {
 							secrets = append(secrets, Secret{
-								File:       fmt.Sprintf("%s (%s)", path, secretType),
-								FilePath:   path,
+								File:       fmt.Sprintf("%s (%s)", relPath, secretType),
+								FilePath:   relPath,
 								LineNumber: lineNumber,
 								Line:       line,
 								Match:      matchedSecret,
@@ -654,13 +835,14 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 								Entropy:    entropy,
 								Context:    context,
 							})
+							seenLines[lineNumber] = true
 						}
 					}
 				} else if confidence != "low" {
 					// No LLM pipeline or low confidence - use standard detection
 					secrets = append(secrets, Secret{
-						File:       fmt.Sprintf("%s (%s)", path, secretType),
-						FilePath:   path,
+						File:       fmt.Sprintf("%s (%s)", relPath, secretType),
+						FilePath:   relPath,
 						LineNumber: lineNumber,
 						Line:       line,
 						Match:      matchedSecret,
@@ -670,6 +852,7 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 						Entropy:    entropy,
 						Context:    context,
 					})
+					seenLines[lineNumber] = true
 				}
 				break
 			}
@@ -684,21 +867,110 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 }
 
 func AdditionalSecretPatterns() []string {
-	// Additional secret patterns (NOT vulnerability scanners like XSS/SQLi - those were removed to reduce noise)
+	// Additional patterns that complement the core set - focus on less common services
 	return []string{
-		// Private SSH/RSA keys (full block)
-		`-----BEGIN\sRSA\sPRIVATE\sKEY-----[\s\S]+-----END\sRSA\sPRIVATE\sKEY-----`,
-		// S3 Bucket URLs (may indicate credential exposure)
+		// S3 Bucket URLs (may indicate misconfiguration)
 		`(?i)s3\.amazonaws\.com/[\w\-\.]+`,
-		// Basic Authentication credentials in URLs
-		`(?i)(?:http|https)://\w+:\w+@[\w\-\.]+`,
-		// JWT tokens
-		`(?i)ey(?:J[a-zA-Z0-9_-]+)[.](?:[a-zA-Z0-9_-]+)[.](?:[a-zA-Z0-9_-]+)`,
-		// Connection strings (database)
-		`(?i)(?:Server|Host)=([\w\.-]+);\s*(?:Port|Database|User\s*ID|Password)=([^;\s]+)(?:;\s*(?:Port|Database|User\s*ID|Password)=([^;\s]+))*`,
-		// Encryption keys
-		`(?i)encryPublicKey\s*=\s*"([^"]*)"`,
-		`(?i)decryPrivateKey\s*=\s*"([^"]*)"`,
+		// Windows/ADO connection strings
+		`(?i)(?:Server|Host|Data\s*Source)=([\w\.-]+);\s*(?:Port|Database|Initial\s*Catalog|User\s*ID|Password)=([^;\s]+)`,
+		// Fastly API Token
+		`(?i)fastly[_-]?(?:api[_-]?)?(?:token|key)["'\s:=]+[A-Za-z0-9_-]{32}`,
+		// Contentful
+		`(?i)contentful[_-]?(?:access[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{43,}`,
+		// Prismic
+		`(?i)prismic[_-]?(?:api[_-]?)?(?:token|key)["'\s:=]+[A-Za-z0-9_-]{40,}`,
+		// Sanity
+		`(?i)sanity[_-]?(?:api[_-]?)?token["'\s:=]+sk[A-Za-z0-9]{60,}`,
+		// Hasura
+		`(?i)hasura[_-]?(?:admin[_-]?)?secret["'\s:=]+[A-Za-z0-9_-]{32,}`,
+		// Supabase (service role key pattern)
+		`(?i)supabase[_-]?(?:service[_-]?)?key["'\s:=]+eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`,
+		// PlanetScale
+		`pscale_tkn_[A-Za-z0-9_-]{43}`,
+		// Turso
+		`(?i)turso[_-]?(?:auth[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{40,}`,
+		// Upstash
+		`(?i)upstash[_-]?redis[_-]?rest[_-]?token["'\s:=]+[A-Za-z0-9_=-]{40,}`,
+		// Convex
+		`(?i)convex[_-]?deploy[_-]?key["'\s:=]+prod:[A-Za-z0-9_-]{40,}`,
+		// Railway
+		`(?i)railway[_-]?token["'\s:=]+[A-Za-z0-9_-]{36,}`,
+		// Render
+		`(?i)render[_-]?api[_-]?key["'\s:=]+rnd_[A-Za-z0-9]{24,}`,
+		// Fly.io
+		`(?i)fly[_-]?(?:api[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{43}`,
+		// Deno Deploy
+		`(?i)deno[_-]?deploy[_-]?token["'\s:=]+[A-Za-z0-9_-]{40,}`,
+		// Expo
+		`(?i)expo[_-]?(?:access[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{40,}`,
+		// Snyk
+		`(?i)snyk[_-]?(?:api[_-]?)?token["'\s:=]+[0-9a-f-]{36}`,
+		// Codecov
+		`(?i)codecov[_-]?token["'\s:=]+[0-9a-f-]{36}`,
+		// Coveralls
+		`(?i)coveralls[_-]?(?:repo[_-]?)?token["'\s:=]+[A-Za-z0-9]{32,}`,
+		// SonarQube/SonarCloud
+		`(?i)sonar[_-]?(?:token|login)["'\s:=]+[a-f0-9]{40}`,
+		// Terraform Cloud
+		`(?i)(?:tfc|terraform)[_-]?token["'\s:=]+[A-Za-z0-9]{14}\.[A-Za-z0-9]{14}\.[A-Za-z0-9]{21,}`,
+		// HashiCorp Vault
+		`(?i)vault[_-]?token["'\s:=]+(?:hvs\.|s\.)[A-Za-z0-9_-]{24,}`,
+		// Doppler
+		`dp\.(?:ct|pt|st)\.[A-Za-z0-9]{40,}`,
+		// 1Password
+		`ops_[A-Za-z0-9]{43}`,
+		// LastPass
+		`(?i)lastpass[_-]?(?:api[_-]?)?(?:key|token)["'\s:=]+[A-Za-z0-9]{32,}`,
+		// Pulumi
+		`pul-[A-Za-z0-9]{40}`,
+		// Weights & Biases (wandb)
+		`(?i)wandb[_-]?api[_-]?key["'\s:=]+[a-f0-9]{40}`,
+		// Comet ML
+		`(?i)comet[_-]?api[_-]?key["'\s:=]+[A-Za-z0-9]{40}`,
+		// Neptune AI
+		`(?i)neptune[_-]?api[_-]?token["'\s:=]+eyJ[A-Za-z0-9_-]+`,
+		// Roboflow
+		`(?i)roboflow[_-]?api[_-]?key["'\s:=]+[A-Za-z0-9]{40,}`,
+		// Pinecone
+		`(?i)pinecone[_-]?api[_-]?key["'\s:=]+[a-f0-9-]{36}`,
+		// Weaviate
+		`(?i)weaviate[_-]?api[_-]?key["'\s:=]+[A-Za-z0-9_-]{40,}`,
+		// Qdrant
+		`(?i)qdrant[_-]?api[_-]?key["'\s:=]+[A-Za-z0-9_-]{32,}`,
+		// Milvus
+		`(?i)milvus[_-]?(?:api[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{32,}`,
+		// Cohere
+		`(?i)cohere[_-]?api[_-]?key["'\s:=]+[A-Za-z0-9]{40}`,
+		// Mistral AI
+		`(?i)mistral[_-]?api[_-]?key["'\s:=]+[A-Za-z0-9]{32}`,
+		// Together AI
+		`(?i)together[_-]?api[_-]?key["'\s:=]+[a-f0-9]{64}`,
+		// Groq
+		`gsk_[A-Za-z0-9]{52}`,
+		// Perplexity
+		`pplx-[A-Za-z0-9]{48}`,
+		// ElevenLabs
+		`(?i)elevenlabs[_-]?api[_-]?key["'\s:=]+[a-f0-9]{32}`,
+		// AssemblyAI
+		`(?i)assemblyai[_-]?api[_-]?key["'\s:=]+[a-f0-9]{32}`,
+		// Deepgram
+		`(?i)deepgram[_-]?api[_-]?key["'\s:=]+[a-f0-9]{40}`,
+		// Rev AI
+		`(?i)rev[_-]?(?:ai[_-]?)?(?:access[_-]?)?token["'\s:=]+[A-Za-z0-9_-]{40,}`,
+		// Bannerbear
+		`bb_(?:live|test)_[A-Za-z0-9]{32}`,
+		// imgix
+		`(?i)imgix[_-]?(?:api[_-]?)?(?:key|token)["'\s:=]+[A-Za-z0-9_-]{32,}`,
+		// Cloudinary
+		`(?i)cloudinary[_-]?(?:api[_-]?)?secret["'\s:=]+[A-Za-z0-9_-]{27}`,
+		// Uploadcare
+		`(?i)uploadcare[_-]?(?:secret[_-]?)?key["'\s:=]+[a-f0-9]{20}`,
+		// Imgbb
+		`(?i)imgbb[_-]?api[_-]?key["'\s:=]+[a-f0-9]{32}`,
+		// Tenor
+		`(?i)tenor[_-]?api[_-]?key["'\s:=]+[A-Z0-9]{16}`,
+		// Giphy
+		`(?i)giphy[_-]?api[_-]?key["'\s:=]+[A-Za-z0-9]{32}`,
 	}
 }
 

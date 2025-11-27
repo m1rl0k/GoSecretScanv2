@@ -40,9 +40,10 @@ func TestDetectContext(t *testing.T) {
 // Regression test: the demo file should have all fake secrets detected by the core scanner
 // without relying on the LLM pipeline.
 func TestDemoSecretsDetected(t *testing.T) {
-	path := filepath.Join("examples", "demo_secrets", "demo_app.py")
+	relPath := filepath.Join("examples", "demo_secrets", "demo_app.py")
+	absPath := relPath // In test context, relative path works as abs
 
-	secrets, err := scanFileForSecrets(path, nil)
+	secrets, err := scanFileForSecrets(absPath, relPath, nil)
 	if err != nil {
 		t.Fatalf("scanFileForSecrets error: %v", err)
 	}
@@ -79,14 +80,15 @@ func TestDemoSecretsDetected(t *testing.T) {
 // Basic negative test: a plain text file with no obvious secrets should not produce findings.
 func TestNoFalsePositivesOnSafeFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "safe.txt")
+	absPath := filepath.Join(dir, "safe.txt")
+	relPath := "safe.txt"
 	content := "this file intentionally contains no secrets, just some example code and configuration values"
 
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	secrets, err := scanFileForSecrets(path, nil)
+	secrets, err := scanFileForSecrets(absPath, relPath, nil)
 	if err != nil {
 		t.Fatalf("scanFileForSecrets error: %v", err)
 	}
