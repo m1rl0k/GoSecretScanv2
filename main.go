@@ -313,8 +313,8 @@ var (
 	updateBaseline = flag.Bool("update-baseline", false, "Update the baseline file with current findings")
 	baselineReason = flag.String("baseline-reason", "", "Reason for adding findings to baseline (used with --update-baseline)")
 
-	// Git history scanning flags
-	gitHistory    = flag.Bool("git-history", false, "Scan git commit history for secrets")
+	// Git history scanning flags (git history is scanned by default)
+	noGitHistory  = flag.Bool("no-git-history", false, "Skip scanning git commit history")
 	gitMaxCommits = flag.Int("git-max-commits", 0, "Maximum number of commits to scan (0 = all, scans entire history)")
 	gitRef        = flag.String("git-ref", "HEAD", "Git ref to start scanning from")
 	gitSinceDate  = flag.String("git-since", "", "Only scan commits after this date (e.g., 2024-01-01)")
@@ -449,18 +449,17 @@ func main() {
 	}
 
 	var secretsFound []Secret
+	var historySecrets []Secret
 
-	// Git history scanning mode
-	if *gitHistory {
-		fmt.Printf("Scanning git history (max %d commits from %s)...\n", *gitMaxCommits, *gitRef)
-		historySecrets, err := scanGitHistory(dir, *gitMaxCommits, *gitRef, *gitSinceDate, pipeline)
-		if err != nil {
-			fmt.Printf("%sError scanning git history: %v%s\n", RedColor, err, ResetColor)
-			os.Exit(1)
-		}
-		secretsFound = historySecrets
-		fmt.Printf("Found %d potential secrets in git history\n", len(secretsFound))
-	} else {
+	// Check if we're in a git repo
+	isGitRepo := false
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		isGitRepo = true
+	}
+
+	// PHASE 1: Scan current working directory files (with LLM verification if enabled)
+	fmt.Printf("Phase 1: Scanning current files...\n")
+	{
 		// Normal file system scanning
 		var wg sync.WaitGroup
 		var mu sync.Mutex
@@ -523,6 +522,27 @@ func main() {
 
 		wg.Wait()
 	}
+	fmt.Printf("Found %d potential secrets in current files\n", len(secretsFound))
+
+	// PHASE 2: Scan git history (no LLM - can't access file content at old commits)
+	// Git history scanning is ON by default. Use --no-git-history to skip.
+	if isGitRepo && !*noGitHistory {
+		fmt.Printf("\nPhase 2: Scanning git history...\n")
+		var err error
+		historySecrets, err = scanGitHistory(dir, *gitMaxCommits, *gitRef, *gitSinceDate, nil) // nil pipeline = no LLM
+		if err != nil {
+			fmt.Printf("%sWarning: Git history scan failed: %v%s\n", YellowColor, err, ResetColor)
+		} else {
+			fmt.Printf("Found %d potential secrets in git history\n", len(historySecrets))
+			secretsFound = append(secretsFound, historySecrets...)
+		}
+	} else if !isGitRepo {
+		fmt.Printf("\nSkipping git history scan (not a git repository)\n")
+	} else if *noGitHistory {
+		fmt.Printf("\nSkipping git history scan (--no-git-history)\n")
+	}
+
+	fmt.Printf("\nTotal: %d potential secrets found\n\n", len(secretsFound))
 
 	// Apply config-based filtering (allowlists, disabled rules, entropy threshold)
 	secretsFound = filterSecretsByConfig(secretsFound, compiledConfig)

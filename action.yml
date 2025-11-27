@@ -1,5 +1,5 @@
 name: 'GoSecretScan'
-description: 'Fast, concurrent secret scanner that detects API keys, credentials, and security vulnerabilities in source code'
+description: 'Enterprise-grade secret scanner with 189+ patterns. Scans files AND git history. Detects AWS, GCP, Azure, Stripe, GitHub tokens and more.'
 author: 'M1RL0K'
 
 branding:
@@ -11,12 +11,40 @@ inputs:
     description: 'Directory path to scan for secrets (default: current directory)'
     required: false
     default: '.'
-  fail-on-secrets:
-    description: 'Fail the workflow if secrets are found (default: true)'
+  fail-on:
+    description: 'Minimum confidence level to fail: low, medium, high, critical (default: low = fail on any secret)'
+    required: false
+    default: 'low'
+  output-format:
+    description: 'Output format: text, json, or sarif (default: text)'
+    required: false
+    default: 'text'
+  sarif-file:
+    description: 'Path to write SARIF output (for GitHub Security tab integration)'
+    required: false
+    default: ''
+  no-git-history:
+    description: 'Skip scanning git commit history (default: false, scans entire history)'
+    required: false
+    default: 'false'
+  git-max-commits:
+    description: 'Maximum commits to scan in git history (0 = all)'
+    required: false
+    default: '0'
+  config:
+    description: 'Path to config file (.gosecretscanner.json)'
+    required: false
+    default: ''
+  baseline:
+    description: 'Path to baseline file for suppressing known findings'
+    required: false
+    default: ''
+  redact:
+    description: 'Redact secret values in output (default: true)'
     required: false
     default: 'true'
   enable-llm:
-    description: 'Enable LLM-powered verification (requires Docker)'
+    description: 'Enable LLM-powered verification for fewer false positives (requires Docker)'
     required: false
     default: 'false'
   model-path:
@@ -47,6 +75,9 @@ outputs:
   scan-status:
     description: 'Status of the scan (success or failed)'
     value: ${{ steps.scan.outputs.status }}
+  sarif-file:
+    description: 'Path to SARIF output file (if generated)'
+    value: ${{ steps.scan.outputs.sarif-file }}
 
 runs:
   using: 'composite'
@@ -142,17 +173,51 @@ runs:
       shell: bash
       working-directory: ${{ inputs.scan-path }}
       run: |
-        echo "Running GoSecretScanv2 scanner..."
-
-        SECRET_COUNT=0
-        STATUS="success"
+        echo "🔍 GoSecretScan - Enterprise Secret Scanner"
+        echo "==========================================="
 
         SCAN_CMD=("${{ github.action_path }}/gosecretscanner")
 
+        # Core options
+        SCAN_CMD+=("--fail-on=${{ inputs.fail-on }}")
+
+        # Output format
+        OUTPUT_FORMAT="${{ inputs.output-format }}"
+        SARIF_FILE="${{ inputs.sarif-file }}"
+
+        # If SARIF file requested, use sarif output
+        if [ -n "$SARIF_FILE" ]; then
+          OUTPUT_FORMAT="sarif"
+        fi
+        SCAN_CMD+=("--output=$OUTPUT_FORMAT")
+
+        # Redaction
+        if [ "${{ inputs.redact }}" == "false" ]; then
+          SCAN_CMD+=("--redact=false")
+        fi
+
+        # Git history options
+        if [ "${{ inputs.no-git-history }}" == "true" ]; then
+          SCAN_CMD+=("--no-git-history")
+        fi
+        if [ "${{ inputs.git-max-commits }}" != "0" ]; then
+          SCAN_CMD+=("--git-max-commits=${{ inputs.git-max-commits }}")
+        fi
+
+        # Config file
+        if [ -n "${{ inputs.config }}" ]; then
+          SCAN_CMD+=("--config=${{ inputs.config }}")
+        fi
+
+        # Baseline file
+        if [ -n "${{ inputs.baseline }}" ]; then
+          SCAN_CMD+=("--baseline=${{ inputs.baseline }}")
+        fi
+
+        # LLM verification
         if [ "${{ inputs.enable-llm }}" == "true" ]; then
           MODEL_PATH="${{ inputs.model-path }}"
           if [[ "$MODEL_PATH" != /* ]]; then
-            # Resolve to absolute path, removing any ./ prefix
             MODEL_PATH="${{ github.action_path }}/${MODEL_PATH#./}"
           fi
           LLM_ENDPOINT="${{ inputs.llm-endpoint }}"
@@ -162,33 +227,60 @@ runs:
           SCAN_CMD+=("--llm" "--model-path=$MODEL_PATH" "--llm-endpoint=$LLM_ENDPOINT")
         fi
 
-        # Run the scanner and capture output
-        if "${SCAN_CMD[@]}"; then
-          echo "No secrets found."
-          SECRET_COUNT=0
-          STATUS="success"
-        else
-          exit_code=$?
-          if [ $exit_code -eq 1 ]; then
-            echo "Secrets detected!"
-            SECRET_COUNT=$(grep -c "File:" output.log 2>/dev/null || echo "unknown")
-            STATUS="failed"
+        echo "Command: ${SCAN_CMD[*]}"
+        echo ""
 
-            if [ "${{ inputs.fail-on-secrets }}" == "true" ]; then
-              echo "Failing workflow due to detected secrets."
-              exit 1
-            else
-              echo "Secrets found but not failing workflow (fail-on-secrets=false)"
-            fi
+        # Run the scanner
+        set +e
+        if [ -n "$SARIF_FILE" ]; then
+          "${SCAN_CMD[@]}" > "$SARIF_FILE" 2>&1
+          exit_code=$?
+          SECRET_COUNT=$(jq '.runs[0].results | length' "$SARIF_FILE" 2>/dev/null || echo "0")
+          echo "sarif-file=$SARIF_FILE" >> $GITHUB_OUTPUT
+        else
+          OUTPUT=$("${SCAN_CMD[@]}" 2>&1)
+          exit_code=$?
+          echo "$OUTPUT"
+
+          if [ "$OUTPUT_FORMAT" == "json" ]; then
+            SECRET_COUNT=$(echo "$OUTPUT" | jq 'length' 2>/dev/null || echo "0")
           else
-            echo "Scanner encountered an error (exit code: $exit_code)"
-            STATUS="error"
-            exit $exit_code
+            SECRET_COUNT=$(echo "$OUTPUT" | grep -c "potential secrets" | head -1 || echo "0")
           fi
+        fi
+        set -e
+
+        # Determine status based on exit code
+        if [ $exit_code -eq 0 ]; then
+          echo ""
+          echo "✅ No secrets found!"
+          STATUS="success"
+          SECRET_COUNT=0
+        elif [ $exit_code -eq 1 ]; then
+          echo ""
+          echo "🚨 Secrets detected!"
+          STATUS="failed"
+        else
+          echo ""
+          echo "❌ Scanner encountered an error (exit code: $exit_code)"
+          STATUS="error"
+          exit $exit_code
         fi
 
         echo "secrets-found=$SECRET_COUNT" >> $GITHUB_OUTPUT
         echo "status=$STATUS" >> $GITHUB_OUTPUT
+
+        # Exit with failure if secrets found
+        if [ $exit_code -eq 1 ]; then
+          exit 1
+        fi
+
+    - name: Upload SARIF to GitHub Security
+      if: inputs.sarif-file != '' && always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+      continue-on-error: true
 
     - name: Stop llama.cpp server
       if: inputs.enable-llm == 'true' && inputs.manage-llm-server == 'true' && always()
