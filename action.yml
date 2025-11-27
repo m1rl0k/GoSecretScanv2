@@ -231,11 +231,14 @@ runs:
         echo ""
 
         # Run the scanner
+        # When saving to file: stdout (JSON/SARIF) goes to file, stderr (status) shows in console
         set +e
         if [ -n "$SARIF_FILE" ]; then
-          "${SCAN_CMD[@]}" > "$SARIF_FILE" 2>&1
+          "${SCAN_CMD[@]}" > "$SARIF_FILE"
           exit_code=$?
           SECRET_COUNT=$(jq '.runs[0].results | length' "$SARIF_FILE" 2>/dev/null || echo "0")
+          echo ""
+          echo "📊 Results: $SECRET_COUNT findings written to $SARIF_FILE"
           echo "sarif-file=$SARIF_FILE" >> $GITHUB_OUTPUT
         else
           OUTPUT=$("${SCAN_CMD[@]}" 2>&1)
@@ -279,8 +282,9 @@ runs:
       if: inputs.sarif-file != '' && always()
       uses: actions/upload-artifact@v4
       with:
-        name: secret-scan-sarif
+        name: secret-scan-sarif-${{ github.job }}
         path: ${{ inputs.sarif-file }}
+        overwrite: true
       continue-on-error: true
 
     - name: Stop llama.cpp server
