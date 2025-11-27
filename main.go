@@ -724,13 +724,20 @@ func displaySecret(secret Secret) {
 		confidenceColor = RedColor
 	}
 
-	fmt.Printf("\n%sFile:%s %s\n", YellowColor, ResetColor, secret.File)
+	fmt.Printf("\n%s───────────────────────────────────────────────────────%s\n", YellowColor, ResetColor)
+	fmt.Printf("%sFile:%s %s\n", YellowColor, ResetColor, secret.File)
 	fmt.Printf("%sLine Number:%s %d\n", YellowColor, ResetColor, secret.LineNumber)
 	fmt.Printf("%sConfidence:%s %s%s%s (Entropy: %.2f)\n",
 		YellowColor, ResetColor, confidenceColor, strings.ToUpper(secret.Confidence), ResetColor, secret.Entropy)
 	fmt.Printf("%sContext:%s %s\n", YellowColor, ResetColor, secret.Context)
 	fmt.Printf("%sPattern:%s %s\n", YellowColor, ResetColor, secret.Type)
 	fmt.Printf("%sLine:%s %s\n", YellowColor, ResetColor, secret.Line)
+	if secret.Verified {
+		fmt.Printf("%sVerified:%s YES (LLM)\n", YellowColor, ResetColor)
+	}
+	if secret.VerificationReason != "" {
+		fmt.Printf("%sReason:%s %s\n", YellowColor, ResetColor, secret.VerificationReason)
+	}
 }
 
 func maybeRedactSecret(s Secret, redact bool) Secret {
