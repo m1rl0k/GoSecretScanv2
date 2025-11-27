@@ -1,5 +1,5 @@
 name: 'GoSecretScan'
-description: 'Enterprise-grade secret scanner with 189+ patterns. Scans files AND git history. Detects AWS, GCP, Azure, Stripe, GitHub tokens and more.'
+description: 'Fast secret scanner with 189+ patterns. Scans files & git history for API keys, tokens, and credentials.'
 author: 'M1RL0K'
 
 branding:
