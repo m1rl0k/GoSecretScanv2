@@ -2,17 +2,21 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
 
+	"github.com/m1rl0k/GoSecretScanv2/pkg/baseline"
+	"github.com/m1rl0k/GoSecretScanv2/pkg/config"
 	"github.com/m1rl0k/GoSecretScanv2/pkg/verification"
 )
 
@@ -304,12 +308,28 @@ var (
 	excludeGlobs   = flag.String("exclude-glob", "", "Comma-separated glob patterns to exclude (relative paths)")
 	includeExts    = flag.String("include-ext", "", "Comma-separated list of file extensions to include (e.g. .go,.py)")
 	maxFileSizeCli = flag.Int64("max-file-size", maxFileSizeBytes, "Maximum file size to scan in bytes")
+	configPath     = flag.String("config", "", "Path to config file (default: .gosecretscanner.json in repo root)")
+	baselinePath   = flag.String("baseline", "", "Path to baseline file for suppressing known findings")
+	updateBaseline = flag.Bool("update-baseline", false, "Update the baseline file with current findings")
+	baselineReason = flag.String("baseline-reason", "", "Reason for adding findings to baseline (used with --update-baseline)")
+
+	// Git history scanning flags
+	gitHistory    = flag.Bool("git-history", false, "Scan git commit history for secrets")
+	gitMaxCommits = flag.Int("git-max-commits", 100, "Maximum number of commits to scan (0 = all)")
+	gitRef        = flag.String("git-ref", "HEAD", "Git ref to start scanning from")
+	gitSinceDate  = flag.String("git-since", "", "Only scan commits after this date (e.g., 2024-01-01)")
 
 	// Derived settings from flags
 	maxFileSizeLimit int64 = maxFileSizeBytes
 	includeGlobList  []string
 	excludeGlobList  []string
 	includeExtList   []string
+
+	// Loaded configuration
+	compiledConfig *config.CompiledConfig
+
+	// Loaded baseline
+	loadedBaseline *baseline.Baseline
 )
 
 func init() {
@@ -360,10 +380,62 @@ func main() {
 		}
 	}
 
+	// Get working directory for config loading
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Println("Error getting current working directory:", err)
+		os.Exit(1)
+	}
+
+	// Load configuration
+	cfg, err := config.Load(*configPath, dir)
+	if err != nil {
+		fmt.Printf("%sError loading config: %v%s\n", RedColor, err, ResetColor)
+		os.Exit(1)
+	}
+
+	compiledConfig, err = cfg.Compile()
+	if err != nil {
+		fmt.Printf("%sError compiling config: %v%s\n", RedColor, err, ResetColor)
+		os.Exit(1)
+	}
+
+	// Apply config overrides for max file size if not overridden via CLI
+	if *maxFileSizeCli == maxFileSizeBytes && compiledConfig.GetMaxFileSize() != maxFileSizeBytes {
+		maxFileSizeLimit = compiledConfig.GetMaxFileSize()
+	}
+
+	// Merge config allowlist paths with CLI exclude globs
+	for _, p := range cfg.Allowlist.Paths {
+		excludeGlobList = append(excludeGlobList, filepath.ToSlash(p))
+	}
+
+	// Load baseline if specified
+	baselineFile := *baselinePath
+	if baselineFile == "" {
+		// Check for default baseline file in repo root
+		defaultBaseline := filepath.Join(dir, baseline.DefaultBaselineFile)
+		if _, err := os.Stat(defaultBaseline); err == nil {
+			baselineFile = defaultBaseline
+		}
+	}
+	if baselineFile != "" {
+		loadedBaseline, err = baseline.Load(baselineFile)
+		if err != nil {
+			fmt.Printf("%sError loading baseline: %v%s\n", RedColor, err, ResetColor)
+			os.Exit(1)
+		}
+		if loadedBaseline.Count() > 0 {
+			fmt.Printf("%sLoaded baseline with %d known findings%s\n", GreenColor, loadedBaseline.Count(), ResetColor)
+		}
+	} else {
+		loadedBaseline = baseline.New()
+	}
+
 	// Initialize verification pipeline if LLM is enabled
 	var pipeline *verification.Pipeline
 	if *enableLLM {
-		config := &verification.Config{
+		pipelineConfig := &verification.Config{
 			Enabled:             true,
 			DBPath:              *dbPath,
 			ModelPath:           *modelPath,
@@ -373,8 +445,7 @@ func main() {
 			LLMEndpoint:         *llmEndpoint,
 		}
 
-		var err error
-		pipeline, err = verification.NewPipeline(config)
+		pipeline, err = verification.NewPipeline(pipelineConfig)
 		if err != nil {
 			fmt.Printf("%sWarning: Failed to initialize LLM pipeline: %v%s\n", YellowColor, err, ResetColor)
 			fmt.Printf("%sContinuing with standard detection only...%s\n\n", YellowColor, ResetColor)
@@ -385,73 +456,107 @@ func main() {
 		}
 	}
 
-	dir, err := os.Getwd()
-	if err != nil {
-		fmt.Println("Error getting current working directory:", err)
-		os.Exit(1)
-	}
-
 	var secretsFound []Secret
-	var wg sync.WaitGroup
-	var mu sync.Mutex
 
-	// Bounded worker pool for stable scanning on large repos
-	workers := runtime.NumCPU() * 4
-	if workers < 8 {
-		workers = 8
-	}
-	if workers > 64 {
-		workers = 64
-	}
-	sem := make(chan struct{}, workers)
-
-	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	// Git history scanning mode
+	if *gitHistory {
+		fmt.Printf("Scanning git history (max %d commits from %s)...\n", *gitMaxCommits, *gitRef)
+		historySecrets, err := scanGitHistory(dir, *gitMaxCommits, *gitRef, *gitSinceDate, pipeline)
 		if err != nil {
-			return err
+			fmt.Printf("%sError scanning git history: %v%s\n", RedColor, err, ResetColor)
+			os.Exit(1)
 		}
+		secretsFound = historySecrets
+		fmt.Printf("Found %d potential secrets in git history\n", len(secretsFound))
+	} else {
+		// Normal file system scanning
+		var wg sync.WaitGroup
+		var mu sync.Mutex
 
-		rel, relErr := filepath.Rel(dir, path)
-		if relErr != nil {
-			rel = path
+		// Bounded worker pool for stable scanning on large repos
+		workers := runtime.NumCPU() * 4
+		if workers < 8 {
+			workers = 8
 		}
-		rel = filepath.ToSlash(rel)
-
-		if info.IsDir() {
-			if shouldIgnoreDir(path) || shouldSkipDirByUserFilters(rel) {
-				return filepath.SkipDir
-			}
-			return nil
+		if workers > 64 {
+			workers = 64
 		}
+		sem := make(chan struct{}, workers)
 
-		if shouldIgnoreFile(info) {
-			return nil
-		}
-
-		if shouldSkipFileByUserFilters(rel, info) {
-			return nil
-		}
-
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(absPath, relPath string) {
-			defer func() { <-sem; wg.Done() }()
-			secrets, err := scanFileForSecrets(absPath, relPath, pipeline)
+		err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				fmt.Printf("Error scanning file %s: %v\n", absPath, err)
-				return
+				return err
 			}
-			mu.Lock()
-			secretsFound = append(secretsFound, secrets...)
-			mu.Unlock()
-		}(path, rel)
-		return nil
-	})
-	if err != nil {
-		fmt.Println("Error walking the directory:", err)
-		os.Exit(1)
+
+			rel, relErr := filepath.Rel(dir, path)
+			if relErr != nil {
+				rel = path
+			}
+			rel = filepath.ToSlash(rel)
+
+			if info.IsDir() {
+				if shouldIgnoreDir(path) || shouldSkipDirByUserFilters(rel) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			if shouldIgnoreFile(info) {
+				return nil
+			}
+
+			if shouldSkipFileByUserFilters(rel, info) {
+				return nil
+			}
+
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(absPath, relPath string) {
+				defer func() { <-sem; wg.Done() }()
+				secrets, err := scanFileForSecrets(absPath, relPath, pipeline)
+				if err != nil {
+					fmt.Printf("Error scanning file %s: %v\n", absPath, err)
+					return
+				}
+				mu.Lock()
+				secretsFound = append(secretsFound, secrets...)
+				mu.Unlock()
+			}(path, rel)
+			return nil
+		})
+		if err != nil {
+			fmt.Println("Error walking the directory:", err)
+			os.Exit(1)
+		}
+
+		wg.Wait()
 	}
 
-	wg.Wait()
+	// Apply config-based filtering (allowlists, disabled rules, entropy threshold)
+	secretsFound = filterSecretsByConfig(secretsFound, compiledConfig)
+
+	// Apply baseline filtering (suppress known findings)
+	secretsFound = filterSecretsByBaseline(secretsFound, loadedBaseline)
+
+	// Update baseline if requested
+	if *updateBaseline {
+		outputPath := *baselinePath
+		if outputPath == "" {
+			outputPath = filepath.Join(dir, baseline.DefaultBaselineFile)
+		}
+
+		// Add all current findings to baseline
+		for _, s := range secretsFound {
+			entry := baseline.CreateEntry(s.FilePath, s.LineNumber, s.RuleID, s.Match, *baselineReason)
+			loadedBaseline.Add(entry)
+		}
+
+		if err := loadedBaseline.Save(outputPath); err != nil {
+			fmt.Printf("%sError saving baseline: %v%s\n", RedColor, err, ResetColor)
+			os.Exit(1)
+		}
+		fmt.Printf("%sBaseline updated: %s (%d entries)%s\n", GreenColor, outputPath, loadedBaseline.Count(), ResetColor)
+	}
 
 	mode := strings.ToLower(*modeFlag)
 	if mode != "detect" && mode != "protect" && mode != "report" {
@@ -714,6 +819,233 @@ func emitSarif(secrets []Secret, redact bool) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(report)
+}
+
+// filterSecretsByConfig removes findings that match config allowlists or disabled rules.
+func filterSecretsByConfig(secrets []Secret, cc *config.CompiledConfig) []Secret {
+	if cc == nil {
+		return secrets
+	}
+
+	minEntropy := cc.GetMinEntropy()
+	var filtered []Secret
+
+	for _, s := range secrets {
+		// Skip if path is in allowlist
+		if !cc.IsPathAllowed(s.FilePath) {
+			continue
+		}
+
+		// Skip if secret value is in allowlist
+		if cc.IsSecretAllowed(s.Match) {
+			continue
+		}
+
+		// Skip if rule is disabled
+		if cc.IsRuleDisabled(s.RuleID) {
+			continue
+		}
+
+		// Skip if entropy is below threshold (unless it's a high-confidence pattern)
+		if s.Entropy < minEntropy && s.Confidence != "critical" && s.Confidence != "high" {
+			continue
+		}
+
+		filtered = append(filtered, s)
+	}
+
+	return filtered
+}
+
+// filterSecretsByBaseline removes findings that are in the baseline.
+func filterSecretsByBaseline(secrets []Secret, b *baseline.Baseline) []Secret {
+	if b == nil || b.Count() == 0 {
+		return secrets
+	}
+
+	var filtered []Secret
+	for _, s := range secrets {
+		if !b.IsBaselined(s.FilePath, s.RuleID, s.Match) {
+			filtered = append(filtered, s)
+		}
+	}
+
+	return filtered
+}
+
+// GitCommit represents a commit in git history.
+type GitCommit struct {
+	Hash    string
+	Author  string
+	Date    string
+	Message string
+}
+
+// scanGitHistory scans git commit history for secrets.
+func scanGitHistory(repoDir string, maxCommits int, ref, sinceDate string, pipeline *verification.Pipeline) ([]Secret, error) {
+	// Get list of commits
+	args := []string{"log", "--format=%H|%an|%ai|%s", ref}
+	if maxCommits > 0 {
+		args = append(args, fmt.Sprintf("-n%d", maxCommits))
+	}
+	if sinceDate != "" {
+		args = append(args, "--since="+sinceDate)
+	}
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log failed: %w", err)
+	}
+
+	var commits []GitCommit
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		commits = append(commits, GitCommit{
+			Hash:    parts[0],
+			Author:  parts[1],
+			Date:    parts[2],
+			Message: parts[3],
+		})
+	}
+
+	var allSecrets []Secret
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Use worker pool for parallel commit scanning
+	workers := runtime.NumCPU() * 2
+	if workers < 4 {
+		workers = 4
+	}
+	sem := make(chan struct{}, workers)
+
+	for _, commit := range commits {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(c GitCommit) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			secrets, err := scanCommitDiff(repoDir, c, pipeline)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to scan commit %s: %v\n", c.Hash[:8], err)
+				return
+			}
+
+			if len(secrets) > 0 {
+				mu.Lock()
+				allSecrets = append(allSecrets, secrets...)
+				mu.Unlock()
+			}
+		}(commit)
+	}
+
+	wg.Wait()
+	return allSecrets, nil
+}
+
+// scanCommitDiff scans the diff of a single commit for secrets.
+func scanCommitDiff(repoDir string, commit GitCommit, pipeline *verification.Pipeline) ([]Secret, error) {
+	// Get the diff for this commit
+	cmd := exec.Command("git", "show", "--format=", "--unified=0", commit.Hash)
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	return scanDiffContent(out, commit, pipeline)
+}
+
+// scanDiffContent scans diff output for secrets.
+func scanDiffContent(diffData []byte, commit GitCommit, pipeline *verification.Pipeline) ([]Secret, error) {
+	var secrets []Secret
+	var currentFile string
+	lineNum := 0
+
+	scanner := bufio.NewScanner(bytes.NewReader(diffData))
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Track current file from diff headers
+		if strings.HasPrefix(line, "+++ b/") {
+			currentFile = strings.TrimPrefix(line, "+++ b/")
+			lineNum = 0
+			continue
+		}
+
+		// Track line numbers from @@ headers
+		if strings.HasPrefix(line, "@@") {
+			// Parse @@ -old,count +new,count @@
+			parts := strings.Split(line, " ")
+			for _, p := range parts {
+				if strings.HasPrefix(p, "+") && !strings.HasPrefix(p, "+++") {
+					numPart := strings.TrimPrefix(p, "+")
+					if idx := strings.Index(numPart, ","); idx > 0 {
+						numPart = numPart[:idx]
+					}
+					fmt.Sscanf(numPart, "%d", &lineNum)
+					break
+				}
+			}
+			continue
+		}
+
+		// Only scan added lines (lines starting with +)
+		if !strings.HasPrefix(line, "+") || strings.HasPrefix(line, "+++") {
+			if strings.HasPrefix(line, "+") {
+				lineNum++
+			}
+			continue
+		}
+
+		// Remove the leading + for scanning
+		content := strings.TrimPrefix(line, "+")
+		lineNum++
+
+		// Scan this line for secrets
+		for i, pattern := range compiledPatterns {
+			if pattern.MatchString(content) {
+				match := pattern.FindString(content)
+				entropy := calculateEntropy(match)
+				context := detectContext(currentFile, content)
+				confidence := calculateConfidence(match, entropy, context, secretPatterns[i])
+
+				secret := Secret{
+					File:       currentFile,
+					FilePath:   fmt.Sprintf("%s@%s", currentFile, commit.Hash[:8]),
+					LineNumber: lineNum,
+					Line:       content,
+					Match:      match,
+					RuleID:     fmt.Sprintf("pattern-%d", i),
+					Type:       secretPatterns[i],
+					Confidence: confidence,
+					Entropy:    entropy,
+					Context:    fmt.Sprintf("%s (commit: %s by %s)", context, commit.Hash[:8], commit.Author),
+				}
+
+				// Note: LLM verification is skipped for git history scanning
+				// because we don't have access to the full file content at that commit.
+				// The finding is still reported with the pattern-based confidence.
+
+				secrets = append(secrets, secret)
+				break // One match per line
+			}
+		}
+	}
+
+	return secrets, scanner.Err()
 }
 
 func scanFileForSecrets(absPath, relPath string, pipeline *verification.Pipeline) ([]Secret, error) {

@@ -33,3 +33,4 @@ Thumbs.db
 dist/
 build/
 /.gosecretscanner/models
+.gosecretscanner.example.json
