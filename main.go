@@ -410,17 +410,27 @@ func main() {
 		excludeGlobList = append(excludeGlobList, filepath.ToSlash(p))
 	}
 
+	// Helper to print status messages (stderr for JSON/SARIF, stdout for text)
+	outputFormat := *output
+	statusPrint := func(format string, args ...interface{}) {
+		if outputFormat == "json" || outputFormat == "sarif" {
+			fmt.Fprintf(os.Stderr, format, args...)
+		} else {
+			fmt.Printf(format, args...)
+		}
+	}
+
 	// Load baseline ONLY if explicitly specified via --baseline flag
 	// Baseline is opt-in - by default we report ALL findings
 	loadedBaseline = baseline.New()
 	if *baselinePath != "" {
 		loadedBaseline, err = baseline.Load(*baselinePath)
 		if err != nil {
-			fmt.Printf("%sError loading baseline: %v%s\n", RedColor, err, ResetColor)
+			fmt.Fprintf(os.Stderr, "%sError loading baseline: %v%s\n", RedColor, err, ResetColor)
 			os.Exit(1)
 		}
 		if loadedBaseline.Count() > 0 {
-			fmt.Printf("%sLoaded baseline with %d known findings (will be suppressed)%s\n", YellowColor, loadedBaseline.Count(), ResetColor)
+			statusPrint("%sLoaded baseline with %d known findings (will be suppressed)%s\n", YellowColor, loadedBaseline.Count(), ResetColor)
 		}
 	}
 
@@ -439,11 +449,11 @@ func main() {
 
 		pipeline, err = verification.NewPipeline(pipelineConfig)
 		if err != nil {
-			fmt.Printf("%sWarning: Failed to initialize LLM pipeline: %v%s\n", YellowColor, err, ResetColor)
-			fmt.Printf("%sContinuing with standard detection only...%s\n\n", YellowColor, ResetColor)
+			statusPrint("%sWarning: Failed to initialize LLM pipeline: %v%s\n", YellowColor, err, ResetColor)
+			statusPrint("%sContinuing with standard detection only...%s\n\n", YellowColor, ResetColor)
 			pipeline = nil
 		} else {
-			fmt.Printf("%sLLM verification enabled%s\n\n", GreenColor, ResetColor)
+			statusPrint("%sLLM verification enabled%s\n\n", GreenColor, ResetColor)
 			defer pipeline.Close()
 		}
 	}
@@ -458,7 +468,7 @@ func main() {
 	}
 
 	// PHASE 1: Scan current working directory files (with LLM verification if enabled)
-	fmt.Printf("Phase 1: Scanning current files...\n")
+	statusPrint("Phase 1: Scanning current files...\n")
 	{
 		// Normal file system scanning
 		var wg sync.WaitGroup
@@ -522,27 +532,27 @@ func main() {
 
 		wg.Wait()
 	}
-	fmt.Printf("Found %d potential secrets in current files\n", len(secretsFound))
+	statusPrint("Found %d potential secrets in current files\n", len(secretsFound))
 
 	// PHASE 2: Scan git history (no LLM - can't access file content at old commits)
 	// Git history scanning is ON by default. Use --no-git-history to skip.
 	if isGitRepo && !*noGitHistory {
-		fmt.Printf("\nPhase 2: Scanning git history...\n")
+		statusPrint("\nPhase 2: Scanning git history...\n")
 		var err error
 		historySecrets, err = scanGitHistory(dir, *gitMaxCommits, *gitRef, *gitSinceDate, nil) // nil pipeline = no LLM
 		if err != nil {
-			fmt.Printf("%sWarning: Git history scan failed: %v%s\n", YellowColor, err, ResetColor)
+			statusPrint("%sWarning: Git history scan failed: %v%s\n", YellowColor, err, ResetColor)
 		} else {
-			fmt.Printf("Found %d potential secrets in git history\n", len(historySecrets))
+			statusPrint("Found %d potential secrets in git history\n", len(historySecrets))
 			secretsFound = append(secretsFound, historySecrets...)
 		}
 	} else if !isGitRepo {
-		fmt.Printf("\nSkipping git history scan (not a git repository)\n")
+		statusPrint("\nSkipping git history scan (not a git repository)\n")
 	} else if *noGitHistory {
-		fmt.Printf("\nSkipping git history scan (--no-git-history)\n")
+		statusPrint("\nSkipping git history scan (--no-git-history)\n")
 	}
 
-	fmt.Printf("\nTotal: %d potential secrets found\n\n", len(secretsFound))
+	statusPrint("\nTotal: %d potential secrets found\n\n", len(secretsFound))
 
 	// Apply config-based filtering (allowlists, disabled rules, entropy threshold)
 	secretsFound = filterSecretsByConfig(secretsFound, compiledConfig)
