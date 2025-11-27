@@ -315,7 +315,7 @@ var (
 
 	// Git history scanning flags
 	gitHistory    = flag.Bool("git-history", false, "Scan git commit history for secrets")
-	gitMaxCommits = flag.Int("git-max-commits", 100, "Maximum number of commits to scan (0 = all)")
+	gitMaxCommits = flag.Int("git-max-commits", 0, "Maximum number of commits to scan (0 = all, scans entire history)")
 	gitRef        = flag.String("git-ref", "HEAD", "Git ref to start scanning from")
 	gitSinceDate  = flag.String("git-since", "", "Only scan commits after this date (e.g., 2024-01-01)")
 
@@ -410,26 +410,18 @@ func main() {
 		excludeGlobList = append(excludeGlobList, filepath.ToSlash(p))
 	}
 
-	// Load baseline if specified
-	baselineFile := *baselinePath
-	if baselineFile == "" {
-		// Check for default baseline file in repo root
-		defaultBaseline := filepath.Join(dir, baseline.DefaultBaselineFile)
-		if _, err := os.Stat(defaultBaseline); err == nil {
-			baselineFile = defaultBaseline
-		}
-	}
-	if baselineFile != "" {
-		loadedBaseline, err = baseline.Load(baselineFile)
+	// Load baseline ONLY if explicitly specified via --baseline flag
+	// Baseline is opt-in - by default we report ALL findings
+	loadedBaseline = baseline.New()
+	if *baselinePath != "" {
+		loadedBaseline, err = baseline.Load(*baselinePath)
 		if err != nil {
 			fmt.Printf("%sError loading baseline: %v%s\n", RedColor, err, ResetColor)
 			os.Exit(1)
 		}
 		if loadedBaseline.Count() > 0 {
-			fmt.Printf("%sLoaded baseline with %d known findings%s\n", GreenColor, loadedBaseline.Count(), ResetColor)
+			fmt.Printf("%sLoaded baseline with %d known findings (will be suppressed)%s\n", YellowColor, loadedBaseline.Count(), ResetColor)
 		}
-	} else {
-		loadedBaseline = baseline.New()
 	}
 
 	// Initialize verification pipeline if LLM is enabled
