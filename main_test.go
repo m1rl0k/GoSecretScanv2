@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const testPath = "pkg/service/foo.go"
+
 func TestDetectContext(t *testing.T) {
 	cases := []struct {
 		name string
@@ -15,12 +17,12 @@ func TestDetectContext(t *testing.T) {
 		want string
 	}{
 		{"test file detection", "pkg/service/foo_test.go", "secret := \"foo\"", "test_file"},
-		{"comment line", "pkg/service/foo.go", "// TODO: handle", "comment"},
-		{"placeholder brace", "pkg/service/foo.go", "token := \"${API_KEY}\"", "placeholder"},
-		{"placeholder percent", "pkg/service/foo.go", "set %API_KEY%", "placeholder"},
-		{"placeholder dollar", "pkg/service/foo.go", "token := \"$SECRET_TOKEN\"", "placeholder"},
-		{"code with percent formatting", "pkg/service/foo.go", "fmt.Printf(\"token=%s\", token)", "code"},
-		{"pointer code not comment", "pkg/service/foo.go", "value := foo * bar", "code"},
+		{"comment line", testPath, "// TODO: handle", "comment"},
+		{"placeholder brace", testPath, "token := \"${API_KEY}\"", "placeholder"},
+		{"placeholder percent", testPath, "set %API_KEY%", "placeholder"},
+		{"placeholder dollar", testPath, "token := \"$SECRET_TOKEN\"", "placeholder"},
+		{"code with percent formatting", testPath, "fmt.Printf(\"token=%s\", token)", "code"},
+		{"pointer code not comment", testPath, "value := foo * bar", "code"},
 		{"markdown documentation", "docs/setup.md", "Example TOKEN=foo", "documentation"},
 		{"readme file", "README.md", "Set API_KEY=foo", "documentation"},
 	}
@@ -91,5 +93,79 @@ func TestNoFalsePositivesOnSafeFile(t *testing.T) {
 
 	if len(secrets) != 0 {
 		t.Fatalf("expected no secrets, got %d", len(secrets))
+	}
+}
+
+func TestMaybeRedactSecret(t *testing.T) {
+	s := Secret{
+		FilePath:   "src/app.py",
+		LineNumber: 10,
+		Line:       "api_key = \"sk_live_abc123xyz789\"",
+		Match:      "sk_live_abc123xyz789",
+		RuleID:     "pattern-0",
+		Confidence: "high",
+	}
+
+	// Without redaction
+	noRedact := maybeRedactSecret(s, false)
+	if noRedact.Match != s.Match {
+		t.Errorf("expected Match to remain %q, got %q", s.Match, noRedact.Match)
+	}
+	if noRedact.Line != s.Line {
+		t.Errorf("expected Line to remain unchanged, got %q", noRedact.Line)
+	}
+
+	// With redaction
+	redacted := maybeRedactSecret(s, true)
+	if redacted.Match != "****REDACTED****" {
+		t.Errorf("expected Match to be redacted, got %q", redacted.Match)
+	}
+	if !strings.Contains(redacted.Line, "****REDACTED****") {
+		t.Errorf("expected Line to contain redacted marker, got %q", redacted.Line)
+	}
+	if strings.Contains(redacted.Line, "sk_live_abc123xyz789") {
+		t.Errorf("Line should not contain the raw secret after redaction")
+	}
+}
+
+func TestConfidenceScore(t *testing.T) {
+	cases := []struct {
+		level string
+		want  int
+	}{
+		{"critical", 4},
+		{"high", 3},
+		{"medium", 2},
+		{"low", 1},
+		{"CRITICAL", 4}, // case insensitive
+		{"unknown", 0},
+	}
+	for _, tc := range cases {
+		got := confidenceScore(tc.level)
+		if got != tc.want {
+			t.Errorf("confidenceScore(%q) = %d, want %d", tc.level, got, tc.want)
+		}
+	}
+}
+
+func TestMatchAnyGlob(t *testing.T) {
+	cases := []struct {
+		path     string
+		patterns []string
+		want     bool
+	}{
+		{"vendor/github.com/foo", []string{"vendor/*"}, true},
+		{"vendor", []string{"vendor/*"}, true},
+		{"src/vendor/lib", []string{"vendor/*"}, false}, // only matches top-level vendor
+		{"test.go", []string{"*.go"}, true},
+		{"src/app/test.go", []string{"*.go"}, true}, // matches basename
+		{"README.md", []string{"*.txt", "*.md"}, true},
+		{"main.py", []string{"*.go"}, false},
+	}
+	for _, tc := range cases {
+		got := matchAnyGlob(tc.path, tc.patterns)
+		if got != tc.want {
+			t.Errorf("matchAnyGlob(%q, %v) = %v, want %v", tc.path, tc.patterns, got, tc.want)
+		}
 	}
 }

@@ -91,7 +91,12 @@ var (
 	bracePlaceholderPattern   = regexp.MustCompile(`\$\{[^}]+\}`)
 	percentPlaceholderPattern = regexp.MustCompile(`%[A-Za-z0-9_]+%`)
 	dollarPlaceholderPattern  = regexp.MustCompile(`\$[A-Z0-9_]+`)
+
+	// Pre-compiled pattern for detecting regex definition lines (to skip self-matches)
+	regexLinePattern = regexp.MustCompile("^\\s*`.*(?:\\(\\?i\\)|\\\\s|\\\\d|\\[|\\]|\\{|\\}|\\||\\^|\\$).*`")
 )
+
+const ruleIDFmt = "pattern-%d"
 
 type Secret struct {
 	File               string  `json:"-"`
@@ -626,7 +631,7 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 							LineNumber:         lineNumber,
 							Line:               line,
 							Match:              matchedSecret,
-							RuleID:             fmt.Sprintf("pattern-%d", index),
+							RuleID:             fmt.Sprintf(ruleIDFmt, index),
 							Type:               secretPatterns[index],
 							Confidence:         confidence,
 							Entropy:            entropy,
@@ -643,7 +648,7 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 								LineNumber: lineNumber,
 								Line:       line,
 								Match:      matchedSecret,
-								RuleID:     fmt.Sprintf("pattern-%d", index),
+								RuleID:     fmt.Sprintf(ruleIDFmt, index),
 								Type:       secretPatterns[index],
 								Confidence: confidence,
 								Entropy:    entropy,
@@ -659,7 +664,7 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 						LineNumber: lineNumber,
 						Line:       line,
 						Match:      matchedSecret,
-						RuleID:     fmt.Sprintf("pattern-%d", index),
+						RuleID:     fmt.Sprintf(ruleIDFmt, index),
 						Type:       secretPatterns[index],
 						Confidence: confidence,
 						Entropy:    entropy,
@@ -679,49 +684,31 @@ func scanFileForSecrets(path string, pipeline *verification.Pipeline) ([]Secret,
 }
 
 func AdditionalSecretPatterns() []string {
-	vulnerabilityPatterns := []string{
-		// Add your additional regex patterns here
-		`(?i)(<\s*script\b[^>]*>(.*?)<\s*/\s*script\s*>)`,                      // Cross-site scripting (XSS)
-		`(?i)(\b(?:or|and)\b\s*[\w-]*\s*=\s*[\w-]*\s*\b(?:or|and)\b\s*[^\s]+)`, // SQL injection
-		`(?i)(['"\s]exec(?:ute)?\s*[(\s]*\s*@\w+\s*)`,                          // SQL injection (EXEC, EXECUTE)
-		`(?i)(['"\s]union\s*all\s*select\s*[\w\s,]+(?:from|into|where)\s*\w+)`, // SQL injection (UNION ALL SELECT)
-		// Private SSH keys
+	// Additional secret patterns (NOT vulnerability scanners like XSS/SQLi - those were removed to reduce noise)
+	return []string{
+		// Private SSH/RSA keys (full block)
 		`-----BEGIN\sRSA\sPRIVATE\sKEY-----[\s\S]+-----END\sRSA\sPRIVATE\sKEY-----`,
-		// S3 Bucket URLs
+		// S3 Bucket URLs (may indicate credential exposure)
 		`(?i)s3\.amazonaws\.com/[\w\-\.]+`,
-		// Note: IP address pattern removed - too many false positives in docs/examples
-		// If needed, filter reserved IPs (127.0.0.1, RFC1918) before reporting
-		// Basic Authentication credentials
+		// Basic Authentication credentials in URLs
 		`(?i)(?:http|https)://\w+:\w+@[\w\-\.]+`,
 		// JWT tokens
 		`(?i)ey(?:J[a-zA-Z0-9_-]+)[.](?:[a-zA-Z0-9_-]+)[.](?:[a-zA-Z0-9_-]+)`,
-		// Connection strings (such as database connections)
+		// Connection strings (database)
 		`(?i)(?:Server|Host)=([\w\.-]+);\s*(?:Port|Database|User\s*ID|Password)=([^;\s]+)(?:;\s*(?:Port|Database|User\s*ID|Password)=([^;\s]+))*`,
-		// Path traversal attempts
-		// `(\.\./|\.\.\\)`,
-		// Open redirects
-		// `(?i)(?:(?:https?|ftp)://|%3A%2F%2F)[^\s&]+(?:\s|%20)*(?:\b(?:and|or)\b\s*[\w-]*\s*=\s*[\w-]*\s*\b(?:and|or)\b\s*[^\s]+)?`,
-		// UPLOAD MISCONFIG
-		//`(?i)enctype\s*=\s*['"]multipart/form-data['"]`,
-		// Headers
-		//`(?i)<(title|head)>`,
+		// Encryption keys
 		`(?i)encryPublicKey\s*=\s*"([^"]*)"`,
 		`(?i)decryPrivateKey\s*=\s*"([^"]*)"`,
 	}
-	return vulnerabilityPatterns
 }
 
 func isRegexPatternLine(line string) bool {
 	// Skip lines that contain regex pattern definitions (backtick-quoted strings with regex)
 	// Common in source code defining patterns
-	trimmed := regexp.MustCompile(`^\s+`).ReplaceAllString(line, "")
+	trimmed := strings.TrimLeft(line, " \t")
 
 	// Check if line is a regex pattern definition (starts with backtick or contains backtick with regex chars)
-	if regexp.MustCompile("^`.*(?:\\(\\?i\\)|\\\\s|\\\\d|\\[|\\]|\\{|\\}|\\||\\^|\\$).*`").MatchString(trimmed) {
-		return true
-	}
-
-	return false
+	return regexLinePattern.MatchString(trimmed)
 }
 
 func shouldIgnoreDir(path string) bool {
@@ -759,13 +746,25 @@ func shouldIgnoreFile(info os.FileInfo) bool {
 	return false
 }
 
-func matchAnyGlob(path string, patterns []string) bool {
+func matchAnyGlob(relPath string, patterns []string) bool {
 	for _, p := range patterns {
 		if p == "" {
 			continue
 		}
-		if ok, _ := filepath.Match(p, path); ok {
+		// Try matching on full relative path
+		if ok, _ := filepath.Match(p, relPath); ok {
 			return true
+		}
+		// Also try matching on just the basename for simple patterns
+		if ok, _ := filepath.Match(p, filepath.Base(relPath)); ok {
+			return true
+		}
+		// Support "dir/*" style: check if pattern prefix matches path segments
+		if strings.HasSuffix(p, "/*") {
+			prefix := strings.TrimSuffix(p, "/*")
+			if strings.HasPrefix(relPath, prefix+"/") || relPath == prefix {
+				return true
+			}
 		}
 	}
 	return false

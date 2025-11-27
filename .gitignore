@@ -32,3 +32,4 @@ Thumbs.db
 # Build artifacts
 dist/
 build/
+/.gosecretscanner/models
