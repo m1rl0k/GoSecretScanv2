@@ -110,7 +110,7 @@ func (v *LLMVerifier) Verify(finding *Finding, context *CodeContext) (*Verificat
 
 	result, err := v.invokeLLM(prompt)
 	if err != nil {
-		fmt.Printf("Warning: LLM verification failed, falling back to heuristics: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: LLM verification failed, falling back to heuristics: %v\n", err)
 		return v.heuristicVerify(finding, context), nil
 	}
 

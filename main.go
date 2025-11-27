@@ -610,6 +610,33 @@ func main() {
 		}
 	}
 
+	// For JSON/SARIF modes, print a summary to stderr so it shows in CI logs
+	if (output == "json" || output == "sarif") && len(secretsFound) > 0 {
+		fmt.Fprintf(os.Stderr, "\n--- Secrets Found (%d) ---\n\n", len(secretsFound))
+		for i, s := range secretsFound {
+			r := maybeRedactSecret(s, redact)
+
+			// Truncate match for display
+			match := r.Match
+			if len(match) > 60 {
+				match = match[:57] + "..."
+			}
+
+			fmt.Fprintf(os.Stderr, "  #%d\n", i+1)
+			fmt.Fprintf(os.Stderr, "    File:       %s\n", r.FilePath)
+			fmt.Fprintf(os.Stderr, "    Line:       %d\n", r.LineNumber)
+			fmt.Fprintf(os.Stderr, "    Confidence: %s\n", strings.ToUpper(r.Confidence))
+			fmt.Fprintf(os.Stderr, "    Match:      %s\n", match)
+			if r.Verified {
+				fmt.Fprintf(os.Stderr, "    Verified:   YES (LLM)\n")
+			}
+			if r.VerificationReason != "" {
+				fmt.Fprintf(os.Stderr, "    Reason:     %s\n", r.VerificationReason)
+			}
+			fmt.Fprintf(os.Stderr, "\n")
+		}
+	}
+
 	switch output {
 	case "json":
 		out := make([]Secret, len(secretsFound))
