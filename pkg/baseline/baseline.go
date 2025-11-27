@@ -14,11 +14,11 @@ const DefaultBaselineFile = ".gosecretscanner-baseline.json"
 
 // Entry represents a single finding in the baseline.
 type Entry struct {
-	Fingerprint string `json:"fingerprint"` // Unique identifier for this finding
-	FilePath    string `json:"file"`        // Relative file path
-	LineNumber  int    `json:"line"`        // Original line number (may drift)
-	RuleID      string `json:"rule_id"`     // Rule that triggered this finding
-	SecretHash  string `json:"secret_hash"` // SHA256 of the secret value (for verification)
+	Fingerprint string `json:"fingerprint"`      // Unique identifier for this finding
+	FilePath    string `json:"file"`             // Relative file path
+	LineNumber  int    `json:"line"`             // Original line number (may drift)
+	RuleID      string `json:"rule_id"`          // Rule that triggered this finding
+	SecretHash  string `json:"secret_hash"`      // SHA256 of the secret value (for verification)
 	Reason      string `json:"reason,omitempty"` // Why this was baselined (optional)
 }
 
@@ -143,4 +143,3 @@ func CreateEntry(filePath string, lineNumber int, ruleID, secretValue, reason st
 		Reason:      reason,
 	}
 }
-

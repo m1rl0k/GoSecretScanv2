@@ -160,4 +160,3 @@ func TestCompiledConfig(t *testing.T) {
 		t.Error("pattern-1 should NOT be disabled")
 	}
 }
-

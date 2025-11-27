@@ -152,4 +152,3 @@ func TestLoadInvalid(t *testing.T) {
 		t.Error("Load should error for invalid JSON")
 	}
 }
-
